@@ -897,7 +897,7 @@ class _HomePageContentState extends State<HomePageContent> {
                       width: double.infinity,
                       height: 56,
                       child: ElevatedButton(
-                        onPressed: _isVerifying || !_hasInput ? null : _handleVerification,
+                        onPressed: _isVerifying ? null : _handleVerification,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: _primaryBlue,
                           foregroundColor: Colors.white,

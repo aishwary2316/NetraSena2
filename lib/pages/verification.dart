@@ -1,10 +1,14 @@
 // lib/pages/verification.dart
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
 import '../services/api_service.dart';
+
+/// Enum for per-field states (top-level; must not be declared inside a class)
+enum FieldState { normal, suspicious, missing, serviceUnavailable }
 
 /// High-level wrapper: creates ApiService and calls showVerificationDialog.
 Future<void> verifyDriverAndShowDialog(
@@ -56,12 +60,12 @@ Future<void> showVerificationDialog(
       child: const Center(
         child: Card(
           child: Padding(
-            padding: EdgeInsets.all(32.0),
+            padding: EdgeInsets.all(24.0),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 CircularProgressIndicator(),
-                SizedBox(height: 16),
+                SizedBox(height: 12),
                 Text(
                   'Verifying...',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
@@ -139,9 +143,14 @@ Future<void> showVerificationDialog(
     }
   }
 
-  // Dismiss loading
-  if (Navigator.of(context).canPop()) Navigator.of(context).pop();
-
+  // Dismiss loading dialog (explicitly target the root navigator that showDialog used).
+  // Use try/catch to avoid throwing if the dialog was already dismissed.
+  try {
+    Navigator.of(context, rootNavigator: true).pop();
+  } catch (_) {
+    // Fallback: if that didn't work, pop the nearest navigator if possible.
+    if (Navigator.of(context).canPop()) Navigator.of(context).pop();
+  }
 
   if (errorMessage != null) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errorMessage)));
@@ -189,7 +198,7 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
   void initState() {
     super.initState();
     _animationController = AnimationController(
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 600),
       vsync: this,
     );
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(CurvedAnimation(parent: _animationController, curve: Curves.easeInOut));
@@ -202,83 +211,132 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
     super.dispose();
   }
 
+  // Responsive scale helper (based on screen width)
+  double _scale() {
+    final w = MediaQuery.of(context).size.width;
+    // base width 390 (approx iPhone 12). clamp to [0.85, 1.15]
+    final raw = w / 390.0;
+    return math.max(0.85, math.min(1.15, raw));
+  }
+
   Map<String, dynamic>? get dlData => widget.body['dlData'] is Map ? Map<String, dynamic>.from(widget.body['dlData']) : null;
   Map<String, dynamic>? get rcData => widget.body['rcData'] is Map ? Map<String, dynamic>.from(widget.body['rcData']) : null;
   Map<String, dynamic>? get driverData => widget.body['driverData'] is Map ? Map<String, dynamic>.from(widget.body['driverData']) : null;
   bool get suspiciousFlag => widget.body['suspicious'] == true;
 
+  /// Return concise user-facing reason when a field is suspicious or unavailable.
+  String? _extractReason(Map<String, dynamic>? data) {
+    if (data == null) return null;
+    if (data['reason'] != null) return data['reason'].toString();
+    if (data['message'] != null) return data['message'].toString();
+    if (data['note'] != null) return data['note'].toString();
+    if (data['description'] != null) return data['description'].toString();
+
+    // status-based reasons
+    final status = (data['status'] ?? data['verification'] ?? '').toString();
+    if (status.isNotEmpty) return status;
+
+    return null;
+  }
+
+  /// Determine per-field state from API data
+  FieldState _stateFromData(Map<String, dynamic>? data, {String kind = 'generic'}) {
+    // If no data provided -> mark missing
+    if (data == null) return FieldState.missing;
+
+    final status = (data['status'] ?? data['verification'] ?? '').toString().toLowerCase();
+
+    // Positive suspicious indicators
+    if (status == 'blacklisted' || status == 'suspicious' || status == 'suspended' || status == 'blocked') {
+      return FieldState.suspicious;
+    }
+    if (status == 'alert' || status == 'match') {
+      return FieldState.suspicious;
+    }
+
+    // Service unavailable / error
+    if (status == 'service_unavailable' || status == 'serviceunavailable' || status == 'unavailable') {
+      return FieldState.serviceUnavailable;
+    }
+
+    // If backend provides arrays of matches, non-empty => suspicious
+    for (final k in ['matches', 'dl_matches', 'detected_plates', 'matches_list', 'results']) {
+      if (data.containsKey(k) && data[k] is List && (data[k] as List).isNotEmpty) return FieldState.suspicious;
+    }
+
+    // Treat explicit numeric counts > 0 as suspicious
+    for (final k in ['count', 'matches_count', 'total']) {
+      if (data.containsKey(k) && (data[k] is num) && (data[k] as num) > 0) return FieldState.suspicious;
+    }
+
+    // IMPORTANT: treat 'not_found' as NORMAL (your DB contains only suspicious entries)
+    // Treat other empty/NA-like values as normal
+    final lowered = status.trim();
+    if (lowered.isEmpty || lowered == 'not_found' || lowered == 'n/a' || lowered == 'na' || lowered == 'none') {
+      return FieldState.normal;
+    }
+
+    // Default to normal if nothing positive found
+    return FieldState.normal;
+  }
+
+  /// Build a list of suspicious reasons (only positive matches).
   List<String> _suspiciousReasons() {
     final List<String> reasons = [];
-    if (dlData != null) {
-      final dlStatus = (dlData!['status'] ?? '').toString().toLowerCase();
-      if (dlStatus == 'blacklisted') reasons.add('Driving License is BLACKLISTED');
-      if (dlStatus == 'not_found') reasons.add('DL not found in DB');
+    final dlSt = _stateFromData(dlData);
+    final rcSt = _stateFromData(rcData);
+    final faceSt = _stateFromData(driverData);
+
+    if (dlSt == FieldState.suspicious) {
+      final r = _extractReason(dlData) ?? 'Driving License matched a suspicious entry';
+      reasons.add('DL: $r');
     }
-    if (rcData != null) {
-      final rcStatus = (rcData!['status'] ?? rcData!['verification'] ?? '').toString().toLowerCase();
-      if (rcStatus == 'blacklisted') reasons.add('Vehicle / RC is BLACKLISTED');
-      if (rcStatus == 'not_found') reasons.add('RC / Vehicle not found in DB');
+    if (rcSt == FieldState.suspicious) {
+      final r = _extractReason(rcData) ?? 'Vehicle/Plate matched a suspicious entry';
+      reasons.add('RC: $r');
     }
-    if (driverData != null) {
-      final drvStatus = (driverData!['status'] ?? '').toString().toUpperCase();
-      if (drvStatus == 'ALERT') reasons.add('Driver matched a SUSPECT (face recognition ALERT)');
-      if (drvStatus == 'SERVICE_UNAVAILABLE') reasons.add('Face recognition service unavailable');
+    if (faceSt == FieldState.suspicious) {
+      final r = _extractReason(driverData) ?? 'Driver face matched a suspicious entry';
+      reasons.add('Face: $r');
     }
-    if (suspiciousFlag && reasons.isEmpty) reasons.add('System raised a suspicious flag (details in raw JSON)');
+
+    // honor global suspicious flag if set by backend
+    if (suspiciousFlag && reasons.isEmpty) {
+      reasons.add('Backend flagged this entry as suspicious (see raw JSON for details).');
+    }
+
     return reasons;
   }
 
-  Color get _statusColor {
-    final reasons = _suspiciousReasons();
-    if (suspiciousFlag || reasons.isNotEmpty) {
-      return const Color(0xFFE53E3E);
-    }
-    final dlStatus = (dlData?['status'] ?? '').toString().toLowerCase();
-    final rcStatus = (rcData?['status'] ?? rcData?['verification'] ?? '').toString().toLowerCase();
-    final driverStatus = (driverData?['status'] ?? '').toString().toLowerCase();
+  // Shorthand helpers for top-level checks
+  FieldState get _dlState => _stateFromData(dlData, kind: 'dl');
+  FieldState get _rcState => _stateFromData(rcData, kind: 'rc');
+  FieldState get _faceState => _stateFromData(driverData, kind: 'face');
 
-    if (dlStatus == 'blacklisted' || rcStatus == 'blacklisted' || driverStatus == 'alert') {
-      return const Color(0xFFE53E3E);
-    }
-    if (dlStatus == 'not_found' || rcStatus == 'not_found' || driverStatus == 'service_unavailable' || dlData == null || rcData == null) {
-      return const Color(0xFFFF8C00);
-    }
+  bool get _anySuspicious => _dlState == FieldState.suspicious || _rcState == FieldState.suspicious || _faceState == FieldState.suspicious;
+  bool get _anyMissingOrError =>
+      _dlState == FieldState.missing ||
+          _rcState == FieldState.missing ||
+          _faceState == FieldState.missing ||
+          _dlState == FieldState.serviceUnavailable ||
+          _rcState == FieldState.serviceUnavailable ||
+          _faceState == FieldState.serviceUnavailable;
 
+  /// Provide the overall banner color (RED only when any suspicious; otherwise GREEN)
+  Color get _overallColor {
+    if (_anySuspicious) return const Color(0xFFE53E3E);
     return const Color(0xFF38A169);
   }
 
-  String get _statusText {
-    final reasons = _suspiciousReasons();
-    if (suspiciousFlag || reasons.isNotEmpty) return 'SUSPICIOUS';
-    final dlStatus = (dlData?['status'] ?? '').toString().toLowerCase();
-    final rcStatus = (rcData?['status'] ?? rcData?['verification'] ?? '').toString().toLowerCase();
-    final driverStatus = (driverData?['status'] ?? '').toString().toLowerCase();
-
-    if (dlStatus == 'blacklisted' || rcStatus == 'blacklisted' || driverStatus == 'alert') {
-      return 'UNAUTHORIZED';
-    }
-    if (dlStatus == 'not_found' || rcStatus == 'not_found' || driverStatus == 'service_unavailable' || dlData == null || rcData == null) {
-      return 'INCOMPLETE';
-    }
-
+  /// Provide main banner text
+  String get _overallText {
+    if (_anySuspicious) return 'SUSPICIOUS';
     return 'AUTHORIZED';
   }
 
-  IconData get _statusIcon {
-    final reasons = _suspiciousReasons();
-    if (suspiciousFlag || reasons.isNotEmpty) return Icons.dangerous;
-
-    final dlStatus = (dlData?['status'] ?? '').toString().toLowerCase();
-    final rcStatus = (rcData?['status'] ?? rcData?['verification'] ?? '').toString().toLowerCase();
-    final driverStatus = (driverData?['status'] ?? '').toString().toLowerCase();
-
-    if (dlStatus == 'blacklisted' || rcStatus == 'blacklisted' || driverStatus == 'alert') {
-      return Icons.block;
-    }
-    if (dlStatus == 'not_found' || rcStatus == 'not_found' || driverStatus == 'service_unavailable' || dlData == null || rcData == null) {
-      return Icons.warning_amber;
-    }
-
+  /// Provide main banner icon
+  IconData get _overallIcon {
+    if (_anySuspicious) return Icons.dangerous;
     return Icons.verified;
   }
 
@@ -305,89 +363,89 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
     showDialog<void>(
       context: context,
       builder: (ctx) => Dialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         child: Container(
           width: double.maxFinite,
-          constraints: const BoxConstraints(maxHeight: 600),
+          constraints: const BoxConstraints(maxHeight: 520),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                padding: const EdgeInsets.all(20),
+                padding: EdgeInsets.all(14 * _scale()),
                 decoration: BoxDecoration(
                   color: Colors.blue.shade50,
-                  borderRadius: const BorderRadius.only(topLeft: Radius.circular(16), topRight: Radius.circular(16)),
+                  borderRadius: const BorderRadius.only(topLeft: Radius.circular(12), topRight: Radius.circular(12)),
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.history, color: Colors.blue.shade700, size: 24),
-                    const SizedBox(width: 12),
+                    Icon(Icons.history, color: Colors.blue.shade700, size: 20 * _scale()),
+                    SizedBox(width: 10 * _scale()),
                     Expanded(
                       child: Text(
                         'DL Usage History',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue.shade800),
+                        style: TextStyle(fontSize: 16 * _scale(), fontWeight: FontWeight.bold, color: Colors.blue.shade800),
                       ),
                     ),
-                    IconButton(icon: const Icon(Icons.close), onPressed: () => Navigator.of(ctx).pop(), splashRadius: 20),
+                    IconButton(icon: Icon(Icons.close, size: 20 * _scale()), onPressed: () => Navigator.of(ctx).pop(), splashRadius: 20),
                   ],
                 ),
               ),
               Expanded(
                 child: logsList.isEmpty
-                    ? const Center(
+                    ? Center(
                   child: Padding(
-                    padding: EdgeInsets.all(32),
+                    padding: EdgeInsets.all(20 * _scale()),
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.info_outline, size: 48, color: Colors.grey),
-                        SizedBox(height: 16),
-                        Text('No Recent Usage', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600, color: Colors.grey)),
-                        SizedBox(height: 8),
+                        Icon(Icons.info_outline, size: 44 * _scale(), color: Colors.grey),
+                        SizedBox(height: 12 * _scale()),
+                        Text('No Recent Usage', style: TextStyle(fontSize: 16 * _scale(), fontWeight: FontWeight.w600, color: Colors.grey)),
+                        SizedBox(height: 8 * _scale()),
                         Text('No usage logs found for this DL in the last 2 days.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
                       ],
                     ),
                   ),
                 )
                     : ListView.separated(
-                  padding: const EdgeInsets.all(16),
+                  padding: EdgeInsets.all(12 * _scale()),
                   itemCount: logsList.length,
-                  separatorBuilder: (_, __) => const Divider(height: 24),
+                  separatorBuilder: (_, __) => Divider(height: 18 * _scale()),
                   itemBuilder: (c, i) {
                     final item = logsList[i] is Map ? Map<String, dynamic>.from(logsList[i]) : {'raw': logsList[i]};
                     final ts = item['timestamp'] ?? item['time'] ?? '';
                     final vehicleNumber = item['vehicle_number'] ?? item['vehicle'] ?? 'N/A';
 
                     return Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200)),
+                      padding: EdgeInsets.all(12 * _scale()),
+                      decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.grey.shade200)),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Row(
                             children: [
-                              Icon(Icons.directions_car, color: Colors.blue.shade600, size: 20),
-                              const SizedBox(width: 8),
+                              Icon(Icons.directions_car, color: Colors.blue.shade600, size: 18 * _scale()),
+                              SizedBox(width: 8 * _scale()),
                               Expanded(
-                                child: Text('Vehicle: $vehicleNumber', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
+                                child: Text('Vehicle: $vehicleNumber', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14 * _scale())),
                               ),
                             ],
                           ),
                           if (item['dl_number'] != null) ...[
-                            const SizedBox(height: 8),
-                            _buildDetailRow(Icons.credit_card, 'DL Number', item['dl_number']),
+                            SizedBox(height: 8 * _scale()),
+                            _buildDetailRow(Icons.credit_card, 'DL Number', item['dl_number'].toString(), color: Colors.grey.shade700),
                           ],
                           if (item['alert_type'] != null) ...[
-                            const SizedBox(height: 8),
-                            _buildDetailRow(Icons.warning, 'Alert Type', item['alert_type'], color: Colors.orange.shade700),
+                            SizedBox(height: 8 * _scale()),
+                            _buildDetailRow(Icons.warning, 'Alert Type', item['alert_type'].toString(), color: Colors.orange.shade700),
                           ],
                           if (item['description'] != null) ...[
-                            const SizedBox(height: 8),
-                            _buildDetailRow(Icons.description, 'Description', item['description']),
+                            SizedBox(height: 8 * _scale()),
+                            _buildDetailRow(Icons.description, 'Description', item['description'].toString(), color: Colors.grey.shade700),
                           ],
                           if (ts.isNotEmpty) ...[
-                            const SizedBox(height: 8),
-                            _buildDetailRow(Icons.access_time, 'Time', ts),
+                            SizedBox(height: 8 * _scale()),
+                            _buildDetailRow(Icons.access_time, 'Time', ts.toString(), color: Colors.grey.shade700),
                           ],
                         ],
                       ),
@@ -403,208 +461,337 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
   }
 
   Widget _buildDetailRow(IconData icon, String label, String value, {Color? color}) {
+    final s = _scale();
     return Row(
       children: [
-        Icon(icon, size: 16, color: color ?? Colors.grey.shade600),
-        const SizedBox(width: 8),
-        Text('$label: ', style: TextStyle(fontSize: 14, color: color ?? Colors.grey.shade700, fontWeight: FontWeight.w500)),
-        Expanded(child: Text(value, style: TextStyle(fontSize: 14, color: color ?? Colors.grey.shade800))),
+        Icon(icon, size: 14 * s, color: color ?? Colors.grey.shade600),
+        SizedBox(width: 8 * s),
+        Text('$label: ', style: TextStyle(fontSize: 13 * s, color: color ?? Colors.grey.shade700, fontWeight: FontWeight.w500)),
+        Expanded(child: Text(value, style: TextStyle(fontSize: 13 * s, color: color ?? Colors.grey.shade800))),
       ],
+    );
+  }
+
+  // ---------------- Summary Row builder for verification summary -----------
+  Widget _buildSummaryRow({required String title, required FieldState state, String? reason}) {
+    final s = _scale();
+    Color getColor() {
+      switch (state) {
+        case FieldState.suspicious:
+          return const Color(0xFFE53E3E);
+        case FieldState.missing:
+        case FieldState.serviceUnavailable:
+          return Colors.orange.shade700;
+        case FieldState.normal:
+        default:
+          return const Color(0xFF38A169);
+      }
+    }
+
+    IconData getIcon() {
+      switch (state) {
+        case FieldState.suspicious:
+          return Icons.cancel; // red cross
+        case FieldState.missing:
+        case FieldState.serviceUnavailable:
+          return Icons.info_outline; // orange info
+        case FieldState.normal:
+        default:
+          return Icons.check_circle; // green tick
+      }
+    }
+
+    final c = getColor();
+    final icon = getIcon();
+
+    String subtitle;
+    if (state == FieldState.normal) {
+      subtitle = 'Clear — not listed as suspicious';
+    } else if (state == FieldState.suspicious) {
+      subtitle = reason ?? 'Matched in suspicious DB';
+    } else if (state == FieldState.serviceUnavailable) {
+      subtitle = reason ?? 'Service unavailable for this check';
+    } else {
+      subtitle = reason ?? 'No data provided';
+    }
+
+    return Padding(
+      padding: EdgeInsets.symmetric(vertical: 6 * s),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: EdgeInsets.all(8 * s),
+            decoration: BoxDecoration(color: c.withOpacity(0.12), borderRadius: BorderRadius.circular(8)),
+            child: Icon(icon, size: 18 * s, color: c),
+          ),
+          SizedBox(width: 10 * s),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(title, style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14 * s)),
+              SizedBox(height: 4 * s),
+              Text(subtitle, style: TextStyle(color: c, fontSize: 12 * s)),
+            ]),
+          ),
+          // When suspicious show a compact details hint
+          if (state == FieldState.suspicious)
+            IconButton(
+              icon: Icon(Icons.chevron_right, color: Colors.red.shade400, size: 20 * s),
+              onPressed: () {
+                setState(() {
+                  _showRawJson = true;
+                });
+              },
+              splashRadius: 20,
+            ),
+        ],
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final s = _scale();
+    final screenW = MediaQuery.of(context).size.width;
+    // small horizontal padding for narrow devices
+    final horizontalPadding = screenW > 600 ? 20.0 : 12.0;
+
     return Theme(
       data: Theme.of(context).copyWith(
-        cardTheme: CardThemeData(elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), color: Colors.white),
+        cardTheme: CardThemeData(elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), color: Colors.white),
       ),
       child: Scaffold(
         backgroundColor: Colors.grey.shade50,
         appBar: AppBar(
-          title: const Text('Verification Dashboard', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+          title: Text('Verification Dashboard', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white, fontSize: 18 * s)),
           centerTitle: true,
           backgroundColor: const Color(0xFF1E40AF),
           elevation: 0,
-          leading: IconButton(icon: const Icon(Icons.arrow_back, color: Colors.white), onPressed: () => Navigator.of(context).pop()),
+          leading: IconButton(icon: Icon(Icons.arrow_back, color: Colors.white, size: 20 * s), onPressed: () => Navigator.of(context).pop()),
         ),
         body: FadeTransition(
           opacity: _fadeAnimation,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // Status Card
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(colors: [_statusColor.withOpacity(0.1), _statusColor.withOpacity(0.05)], begin: Alignment.topLeft, end: Alignment.bottomRight),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: _statusColor.withOpacity(0.3), width: 1.5),
-                  boxShadow: [BoxShadow(color: _statusColor.withOpacity(0.15), blurRadius: 20, offset: const Offset(0, 8))],
-                ),
-                child: Column(children: [
-                  Icon(_statusIcon, color: _statusColor, size: 48),
-                  const SizedBox(height: 16),
-                  Text(_statusText.toUpperCase(), style: TextStyle(color: _statusColor, fontWeight: FontWeight.bold, fontSize: 28, letterSpacing: 1.2)),
-                  const SizedBox(height: 8),
-                  Text(_getStatusSubtitle(), textAlign: TextAlign.center, style: TextStyle(color: _statusColor.withOpacity(0.8), fontSize: 14, fontWeight: FontWeight.w500)),
-                ]),
-              ),
-
-              const SizedBox(height: 20),
-
-              // Alert Details
-              if (_suspiciousReasons().isNotEmpty)
+          child: LayoutBuilder(builder: (context, constraints) {
+            return SingleChildScrollView(
+              padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: 14 * s),
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                // ---------- NEW: Top Status + Verification Summary ----------
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(20),
-                  margin: const EdgeInsets.only(bottom: 20),
-                  decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.red.shade200), boxShadow: [BoxShadow(color: Colors.red.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4))]),
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Row(children: [
-                      Icon(Icons.warning, color: Colors.red.shade700, size: 24),
-                      const SizedBox(width: 12),
-                      const Text('Alert Details', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 18)),
-                    ]),
-                    const SizedBox(height: 16),
-                    ..._suspiciousReasons().map((r) => Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 6),
-                      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Container(width: 6, height: 6, margin: const EdgeInsets.only(top: 8, right: 12), decoration: BoxDecoration(color: Colors.red.shade600, shape: BoxShape.circle)),
-                        Expanded(child: Text(r, style: TextStyle(color: Colors.red.shade800, fontSize: 14, height: 1.4))),
-                      ]),
-                    )),
+                  padding: EdgeInsets.all(16 * s),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(colors: [_overallColor.withOpacity(0.12), _overallColor.withOpacity(0.04)], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: _overallColor.withOpacity(0.24), width: 1.0),
+                    boxShadow: [BoxShadow(color: _overallColor.withOpacity(0.08), blurRadius: 12, offset: const Offset(0, 6))],
+                  ),
+                  child: Column(children: [
+                    Icon(_overallIcon, color: _overallColor, size: 40 * s),
+                    SizedBox(height: 8 * s),
+                    Text(_overallText, style: TextStyle(color: _overallColor, fontWeight: FontWeight.bold, fontSize: 22 * s, letterSpacing: 0.8)),
+                    SizedBox(height: 6 * s),
+                    Text(
+                      // subtitle tuned based on presence of suspicious/missing
+                      _anySuspicious
+                          ? 'One or more checks returned suspicious matches'
+                          : (_anyMissingOrError ? 'Available checks are clear. Some fields are incomplete or services unavailable.' : 'All verifications completed successfully'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: _overallColor.withOpacity(0.85), fontSize: 12 * s, fontWeight: FontWeight.w500),
+                    ),
+                    SizedBox(height: 10 * s),
+                    // Show a small yellow badge for incomplete / service-unavailable *only when not suspicious*
+                    if (!_anySuspicious && _anyMissingOrError)
+                      Align(
+                        alignment: Alignment.center,
+                        child: Container(
+                          padding: EdgeInsets.symmetric(horizontal: 10 * s, vertical: 6 * s),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.shade50,
+                            border: Border.all(color: Colors.orange.shade200),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: Row(mainAxisSize: MainAxisSize.min, children: [
+                            Icon(Icons.info_outline, size: 14 * s, color: Colors.orange.shade700),
+                            SizedBox(width: 8 * s),
+                            Text('Incomplete fields or services unavailable', style: TextStyle(color: Colors.orange.shade700, fontWeight: FontWeight.w600, fontSize: 12 * s)),
+                          ]),
+                        ),
+                      ),
                   ]),
                 ),
 
-              // Information Cards
-              _buildInfoCard(
-                title: 'Driving License',
-                icon: Icons.credit_card,
-                data: dlData,
-                primaryKeys: ['name', 'licenseNumber', 'dl_number'],
-                detailsKeys: ['status', 'validity', 'phone_number'],
-                color: Colors.blue,
-              ),
+                SizedBox(height: 16 * s),
 
-              const SizedBox(height: 16),
-
-              _buildInfoCard(
-                title: 'Vehicle Registration',
-                icon: Icons.directions_car,
-                data: rcData,
-                primaryKeys: ['owner_name', 'regn_number'],
-                detailsKeys: ['status', 'verification', 'maker_class', 'vehicle_class', 'engine_number', 'chassis_number', 'crime_involved'],
-                color: Colors.green,
-              ),
-
-              const SizedBox(height: 16),
-
-              _buildInfoCard(
-                title: 'Driver Information',
-                icon: Icons.person,
-                data: driverData,
-                primaryKeys: ['name', 'status'],
-                detailsKeys: ['message'],
-                color: Colors.purple,
-              ),
-
-              const SizedBox(height: 24),
-
-              // JSON Toggle
-              Center(
-                child: InkWell(
-                  onTap: () {
-                    setState(() {
-                      _showRawJson = !_showRawJson;
-                    });
-                  },
-                  borderRadius: BorderRadius.circular(12),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                    decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade300)),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Icon(_showRawJson ? Icons.visibility_off : Icons.code, size: 20, color: Colors.grey.shade700),
-                      const SizedBox(width: 8),
-                      Text(_showRawJson ? 'Hide Raw JSON' : 'View Raw JSON', style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w500)),
-                    ]),
-                  ),
-                ),
-              ),
-
-              if (_showRawJson) ...[
-                const SizedBox(height: 16),
+                // Verification Summary (replaces Alert Details)
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(color: Colors.grey.shade900, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade700)),
-                  child: SelectableText(
-                    JsonEncoder.withIndent('  ').convert(widget.body),
-                    style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: Colors.green, height: 1.4),
+                  padding: EdgeInsets.all(12 * s),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.grey.shade200),
+                    boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 4))],
+                  ),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Row(children: [
+                      Icon(Icons.assignment_turned_in, color: Colors.blue.shade700, size: 18 * s),
+                      SizedBox(width: 10 * s),
+                      Expanded(child: Text('Verification Summary', style: TextStyle(fontSize: 14 * s, fontWeight: FontWeight.bold))),
+                    ]),
+                    SizedBox(height: 10 * s),
+
+                    // DL row
+                    _buildSummaryRow(
+                      title: 'Driving License',
+                      state: _dlState,
+                      reason: _extractReason(dlData),
+                    ),
+
+                    // RC row
+                    _buildSummaryRow(
+                      title: 'Number Plate / RC',
+                      state: _rcState,
+                      reason: _extractReason(rcData),
+                    ),
+
+                    // Face row
+                    _buildSummaryRow(
+                      title: 'Driver Face',
+                      state: _faceState,
+                      reason: _extractReason(driverData),
+                    ),
+
+                    // If there are suspicious reasons, show a compact red footer hint
+                    if (_suspiciousReasons().isNotEmpty) ...[
+                      SizedBox(height: 10 * s),
+                      Container(
+                        padding: EdgeInsets.all(10 * s),
+                        decoration: BoxDecoration(color: Colors.red.shade50, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.red.shade100)),
+                        child: Row(children: [
+                          Icon(Icons.warning, color: Colors.red.shade700, size: 16 * s),
+                          SizedBox(width: 8 * s),
+                          Expanded(child: Text('Suspicious matches found. See details above or view raw JSON for full backend output.', style: TextStyle(color: Colors.red.shade700, fontSize: 12 * s))),
+                        ]),
+                      ),
+                    ],
+                  ]),
+                ),
+
+                SizedBox(height: 16 * s),
+
+                // Information Cards
+                _buildInfoCard(
+                  title: 'Driving License',
+                  icon: Icons.credit_card,
+                  data: dlData,
+                  primaryKeys: ['name', 'licenseNumber', 'dl_number'],
+                  detailsKeys: ['status', 'validity', 'phone_number'],
+                  color: Colors.blue,
+                ),
+
+                SizedBox(height: 12 * s),
+
+                _buildInfoCard(
+                  title: 'Vehicle Registration',
+                  icon: Icons.directions_car,
+                  data: rcData,
+                  primaryKeys: ['owner_name', 'regn_number'],
+                  detailsKeys: ['status', 'verification', 'maker_class', 'vehicle_class', 'engine_number', 'chassis_number', 'crime_involved'],
+                  color: Colors.green,
+                ),
+
+                SizedBox(height: 12 * s),
+
+                _buildInfoCard(
+                  title: 'Driver Information',
+                  icon: Icons.person,
+                  data: driverData,
+                  primaryKeys: ['name', 'status'],
+                  detailsKeys: ['message'],
+                  color: Colors.purple,
+                ),
+
+                SizedBox(height: 18 * s),
+
+                // JSON Toggle
+                Center(
+                  child: InkWell(
+                    onTap: () {
+                      setState(() {
+                        _showRawJson = !_showRawJson;
+                      });
+                    },
+                    borderRadius: BorderRadius.circular(10),
+                    child: Container(
+                      padding: EdgeInsets.symmetric(horizontal: 16 * s, vertical: 10 * s),
+                      decoration: BoxDecoration(color: Colors.grey.shade100, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.grey.shade300)),
+                      child: Row(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(_showRawJson ? Icons.visibility_off : Icons.code, size: 18 * s, color: Colors.grey.shade700),
+                        SizedBox(width: 8 * s),
+                        Text(_showRawJson ? 'Hide Raw JSON' : 'View Raw JSON', style: TextStyle(color: Colors.grey.shade700, fontWeight: FontWeight.w500, fontSize: 13 * s)),
+                      ]),
+                    ),
                   ),
                 ),
-              ],
 
-              const SizedBox(height: 24),
+                if (_showRawJson) ...[
+                  SizedBox(height: 12 * s),
+                  Container(
+                    width: double.infinity,
+                    padding: EdgeInsets.all(12 * s),
+                    decoration: BoxDecoration(color: Colors.grey.shade900, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.grey.shade700)),
+                    child: SelectableText(
+                      JsonEncoder.withIndent('  ').convert(widget.body),
+                      style: TextStyle(fontFamily: 'monospace', fontSize: 12 * s, color: Colors.green, height: 1.4),
+                    ),
+                  ),
+                ],
 
-              // Action Buttons
-              Row(children: [
-                if (dlData != null && (dlData!['licenseNumber'] ?? dlData!['dl_number']) != null)
+                SizedBox(height: 16 * s),
+
+                // Action Buttons
+                Row(children: [
+                  if (dlData != null && (dlData!['licenseNumber'] ?? dlData!['dl_number']) != null)
+                    Expanded(
+                      child: Container(
+                        height: math.max(44 * s, 48),
+                        margin: EdgeInsets.only(right: 8 * s),
+                        child: ElevatedButton.icon(
+                          icon: _fetchingUsage
+                              ? SizedBox(width: 18 * s, height: 18 * s, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.white)))
+                              : Icon(Icons.history, size: 18 * s),
+                          label: Text(_fetchingUsage ? 'Loading...' : 'DL Usage', style: TextStyle(fontSize: 14 * s)),
+                          onPressed: _fetchingUsage
+                              ? null
+                              : () {
+                            final dlNum = (dlData!['licenseNumber'] ?? dlData!['dl_number']).toString();
+                            _fetchDLUsage(dlNum);
+                          },
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade600, foregroundColor: Colors.white, elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
+                        ),
+                      ),
+                    ),
                   Expanded(
                     child: Container(
-                      height: 56,
-                      margin: const EdgeInsets.only(right: 8),
-                      child: ElevatedButton.icon(
-                        icon: _fetchingUsage
-                            ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation<Color>(Colors.white)))
-                            : const Icon(Icons.history, size: 20),
-                        label: Text(_fetchingUsage ? 'Loading...' : 'DL Usage'),
-                        onPressed: _fetchingUsage
-                            ? null
-                            : () {
-                          final dlNum = (dlData!['licenseNumber'] ?? dlData!['dl_number']).toString();
-                          _fetchDLUsage(dlNum);
-                        },
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.blue.shade600, foregroundColor: Colors.white, elevation: 0, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                      height: math.max(44 * s, 48),
+                      margin: EdgeInsets.only(left: 8 * s),
+                      child: OutlinedButton.icon(
+                        icon: Icon(Icons.close, size: 18 * s),
+                        label: Text('Close', style: TextStyle(fontSize: 14 * s)),
+                        onPressed: () => Navigator.of(context).pop(),
+                        style: OutlinedButton.styleFrom(foregroundColor: Colors.grey.shade700, side: BorderSide(color: Colors.grey.shade400), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10))),
                       ),
                     ),
                   ),
-                Expanded(
-                  child: Container(
-                    height: 56,
-                    margin: const EdgeInsets.only(left: 8),
-                    child: OutlinedButton.icon(
-                      icon: const Icon(Icons.close, size: 20),
-                      label: const Text('Close'),
-                      onPressed: () => Navigator.of(context).pop(),
-                      style: OutlinedButton.styleFrom(foregroundColor: Colors.grey.shade700, side: BorderSide(color: Colors.grey.shade400), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-                    ),
-                  ),
-                ),
-              ]),
+                ]),
 
-              const SizedBox(height: 20),
-            ]),
-          ),
+                SizedBox(height: 12 * s),
+              ]),
+            );
+          }),
         ),
       ),
     );
-  }
-
-  String _getStatusSubtitle() {
-    switch (_statusText) {
-      case 'AUTHORIZED':
-        return 'All verifications completed successfully';
-      case 'UNAUTHORIZED':
-        return 'Access denied due to security concerns';
-      case 'INCOMPLETE':
-        return 'Some information could not be verified';
-      case 'SUSPICIOUS':
-        return 'Multiple security flags detected';
-      default:
-        return 'Verification status unknown';
-    }
   }
 
   Widget _buildInfoCard({
@@ -615,68 +802,75 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
     required List<String> detailsKeys,
     required Color color,
   }) {
+    final s = _scale();
+
     if (data == null) {
       return Container(
         width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.grey.shade200), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4))]),
+        padding: EdgeInsets.all(12 * s),
+        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 4))]),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
-            Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)), child: Icon(icon, color: color, size: 24)),
-            const SizedBox(width: 12),
-            Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            Container(padding: EdgeInsets.all(8 * s), decoration: BoxDecoration(color: color.withOpacity(0.08), borderRadius: BorderRadius.circular(8)), child: Icon(icon, color: color, size: 20 * s)),
+            SizedBox(width: 10 * s),
+            Text(title, style: TextStyle(fontSize: 16 * s, fontWeight: FontWeight.bold)),
           ]),
-          const SizedBox(height: 16),
-          Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8)), child: Row(children: [Icon(Icons.info_outline, color: Colors.grey.shade600, size: 20), const SizedBox(width: 12), const Text('No data available for this section', style: TextStyle(color: Colors.grey))])),
+          SizedBox(height: 10 * s),
+          Container(padding: EdgeInsets.all(12 * s), decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(8)), child: Row(children: [Icon(Icons.info_outline, color: Colors.grey.shade600, size: 18 * s), SizedBox(width: 10 * s), Text('No data available for this section', style: TextStyle(color: Colors.grey, fontSize: 13 * s))])),
         ]),
       );
     }
 
     return Container(
       width: double.infinity,
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.grey.shade200), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 4))]),
+      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 4))]),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Header
         Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(color: color.withOpacity(0.05), borderRadius: const BorderRadius.only(topLeft: Radius.circular(16), topRight: Radius.circular(16))),
+          padding: EdgeInsets.all(12 * s),
+          decoration: BoxDecoration(color: color.withOpacity(0.04), borderRadius: const BorderRadius.only(topLeft: Radius.circular(12), topRight: Radius.circular(12))),
           child: Row(children: [
-            Container(padding: const EdgeInsets.all(10), decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(10)), child: Icon(icon, color: color, size: 24)),
-            const SizedBox(width: 16),
-            Expanded(child: Text(title, style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.black87))),
+            Container(padding: EdgeInsets.all(8 * s), decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(10)), child: Icon(icon, color: color, size: 20 * s)),
+            SizedBox(width: 12 * s),
+            Expanded(child: Text(title, style: TextStyle(fontSize: 16 * s, fontWeight: FontWeight.bold, color: Colors.black87))),
           ]),
         ),
 
         // Primary Information
         Padding(
-          padding: const EdgeInsets.all(20),
+          padding: EdgeInsets.all(12 * s),
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             // If this is driver info and a file was passed, show thumbnail
             if (title == 'Driver Information' && widget.driverImage != null) ...[
               Center(
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: Image.file(widget.driverImage!, width: 160, height: 160, fit: BoxFit.cover),
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.file(
+                    widget.driverImage!,
+                    width: math.min(140 * s, MediaQuery.of(context).size.width * 0.45),
+                    height: math.min(140 * s, MediaQuery.of(context).size.width * 0.45),
+                    fit: BoxFit.cover,
+                  ),
                 ),
               ),
-              const SizedBox(height: 12),
+              SizedBox(height: 10 * s),
             ],
 
             ...primaryKeys.where((key) => data.containsKey(key)).map((key) {
               final value = data[key].toString();
               return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
+                padding: EdgeInsets.only(bottom: 10 * s),
                 child: Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200)),
+                  padding: EdgeInsets.all(12 * s),
+                  decoration: BoxDecoration(color: Colors.grey.shade50, borderRadius: BorderRadius.circular(10), border: Border.all(color: Colors.grey.shade200)),
                   child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Container(width: 4, height: 20, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
-                    const SizedBox(width: 12),
+                    Container(width: 4 * s, height: 18 * s, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
+                    SizedBox(width: 10 * s),
                     Expanded(
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text(_formatLabel(key), style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.grey.shade600, letterSpacing: 0.5)),
-                        const SizedBox(height: 4),
-                        Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.black87)),
+                        Text(_formatLabel(key), style: TextStyle(fontSize: 12 * s, fontWeight: FontWeight.w600, color: Colors.grey.shade600, letterSpacing: 0.2)),
+                        SizedBox(height: 6 * s),
+                        Text(value, style: TextStyle(fontSize: 15 * s, fontWeight: FontWeight.w600, color: Colors.black87)),
                       ]),
                     ),
                   ]),
@@ -688,21 +882,21 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
             if (detailsKeys.any((key) => data.containsKey(key)))
               ExpansionTile(
                 tilePadding: EdgeInsets.zero,
-                childrenPadding: const EdgeInsets.only(top: 8),
-                leading: Container(padding: const EdgeInsets.all(6), decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(6)), child: Icon(Icons.expand_more, color: color, size: 16)),
-                title: Text('Additional Details', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.black, fontSize: 14)),
+                childrenPadding: EdgeInsets.only(top: 6 * s),
+                leading: Container(padding: EdgeInsets.all(6 * s), decoration: BoxDecoration(color: color.withOpacity(0.06), borderRadius: BorderRadius.circular(6)), child: Icon(Icons.expand_more, color: color, size: 16 * s)),
+                title: Text('Additional Details', style: TextStyle(fontWeight: FontWeight.w600, color: Colors.black, fontSize: 14 * s)),
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(color: color.withOpacity(0.03), borderRadius: BorderRadius.circular(12), border: Border.all(color: color.withOpacity(0.1))),
+                    padding: EdgeInsets.all(10 * s),
+                    decoration: BoxDecoration(color: color.withOpacity(0.03), borderRadius: BorderRadius.circular(10), border: Border.all(color: color.withOpacity(0.08))),
                     child: Column(
                       children: detailsKeys.where((key) => data.containsKey(key)).map((key) {
                         final value = data[key].toString();
                         return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          padding: EdgeInsets.symmetric(vertical: 6 * s),
                           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            SizedBox(width: 120, child: Text(_formatLabel(key), style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.grey.shade700))),
-                            Expanded(child: Text(value, style: TextStyle(fontSize: 13, color: Colors.grey.shade800, height: 1.3))),
+                            SizedBox(width: math.min(110 * s, MediaQuery.of(context).size.width * 0.35), child: Text(_formatLabel(key), style: TextStyle(fontSize: 13 * s, fontWeight: FontWeight.w600, color: Colors.grey.shade700))),
+                            Expanded(child: Text(value, style: TextStyle(fontSize: 13 * s, color: Colors.grey.shade800, height: 1.3))),
                           ]),
                         );
                       }).toList(),
