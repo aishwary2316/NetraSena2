@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import '../services/api_service.dart';
 import 'auth.dart';
 import 'drawer.dart';
 import 'user_management.dart';
@@ -38,6 +39,8 @@ class _HomePageState extends State<HomePage> {
   static const Color _headerBlue = Color(0xFF1E40AF);
   late bool _isActive;
   int _selectedIndex = 0;
+  final ApiService _api = ApiService();
+
 
   @override
   void initState() {
@@ -47,6 +50,16 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
+    final String? userId = prefs.getString('user_id');
+    if (userId != null && userId.isNotEmpty) {
+      try {
+        // Call the server endpoint POST /api/logout/:userId
+        await _api.logoutServer(userId);
+      } catch (e) {
+        print('Server logout failed: $e. Proceeding with local logout.');
+        // Ignore server error and proceed to clear local session
+      }
+    }
     await prefs.remove('userName');
     await prefs.remove('userEmail');
     await prefs.remove('role');
@@ -54,7 +67,8 @@ class _HomePageState extends State<HomePage> {
     await prefs.remove('loginTime');
 
     const secureStorage = FlutterSecureStorage();
-    await secureStorage.delete(key: 'auth_token');
+    //await secureStorage.delete(key: 'auth_token');
+    await secureStorage.delete(key: 'jwt');
 
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(

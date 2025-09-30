@@ -670,7 +670,7 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
                         child: Row(children: [
                           Icon(Icons.warning, color: Colors.red.shade700, size: 16 * s),
                           SizedBox(width: 8 * s),
-                          Expanded(child: Text('Suspicious matches found. See details above or view raw JSON for full backend output.', style: TextStyle(color: Colors.red.shade700, fontSize: 12 * s))),
+                          Expanded(child: Text('Suspicious matches found.', style: TextStyle(color: Colors.red.shade700, fontSize: 12 * s))),
                         ]),
                       ),
                     ],

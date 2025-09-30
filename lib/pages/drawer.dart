@@ -172,17 +172,18 @@ class AppDrawer extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  SizedBox(
-                    height: 56,
-                    width: double.infinity,
-                    child: Align(
-                      alignment: Alignment.center,
-                      child: Image.asset(
-                        'assets/MoRTH.png',
-                        fit: BoxFit.contain,
-                      ),
-                    ),
-                  ),
+                  // MoRTH logo on app drawer
+                  // SizedBox(
+                  //   height: 56,
+                  //   width: double.infinity,
+                  //   child: Align(
+                  //     alignment: Alignment.center,
+                  //     child: Image.asset(
+                  //       'assets/MoRTH.png',
+                  //       fit: BoxFit.contain,
+                  //     ),
+                  //   ),
+                  // ),
                   const SizedBox(height: 6),
                   Align(alignment: Alignment.center,child: Text(
                     'Version 1.0.0',

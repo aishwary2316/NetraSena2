@@ -28,8 +28,8 @@ class _HomePageContentState extends State<HomePageContent> {
 
   // OCR model endpoints (use the exact working paths)
   final String _dlOcrUrl = 'https://dl-extractor-service-777302308889.us-central1.run.app';
-  // NEW RC API endpoint (as provided)
-  final String _rcOcrUrl = 'https://anpr-service-980624091991.asia-south1.run.app/recognize_plate/';
+  // UPDATED RC API endpoint
+  final String _rcOcrUrl = 'https://enhanced-alpr-980624091991.us-central1.run.app/recognize_plate/';
 
   // Field names used when sending multipart to each OCR endpoint.
   final String _dlOcrFieldName = 'image_file';
@@ -279,17 +279,15 @@ class _HomePageContentState extends State<HomePageContent> {
             }
           } else {
             // -------- RC model (NEW) --------
-            // New API returns:
+            // New API (enhanced-alpr) returns a structure like:
             // {
-            //   "detected_plates": [
-            //     { "plate_text": "...", "confidence": "0.99", ... }
-            //   ]
+            //   "success": true,
+            //   "plates_detected": 1,
+            //   "results": [ { "plate_text": "22BH65174", "ocr_confidence": "89.66%", ... } ]
             // }
-            //
-            // Per new behaviour: the array is ordered by confidence descending.
-            // We ALWAYS consider position 0 only.
-            if (body != null && body['detected_plates'] is List && (body['detected_plates'] as List).isNotEmpty) {
-              final firstPlate = (body['detected_plates'] as List)[0];
+            // We prefer results[0].plate_text when present.
+            if (body != null && body['results'] is List && (body['results'] as List).isNotEmpty) {
+              final firstPlate = (body['results'] as List)[0];
               if (firstPlate is Map) {
                 final plateTextRaw = (firstPlate['plate_text'] ?? '').toString().trim();
                 if (plateTextRaw.isNotEmpty) {

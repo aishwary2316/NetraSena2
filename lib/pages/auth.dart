@@ -26,7 +26,7 @@ class AuthPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Operator Login',
+      title: 'Netra Sarthi Login',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.indigo,
@@ -169,7 +169,7 @@ class _LoginPageState extends State<LoginPage> {
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
                 const Text(
-                  'Operator Login',
+                  'User Login',
                   style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.indigo),
                 ),
                 const SizedBox(height: 24),
@@ -280,16 +280,16 @@ class _LoginPageState extends State<LoginPage> {
                     padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                     child: Row(
                       children: [
-                        Image.asset('assets/india_gov.png', height: 50, errorBuilder: (c, o, s) => const SizedBox()),
+                        Image.asset('assets/logo.png', height: 50, errorBuilder: (c, o, s) => const SizedBox()),
                         const SizedBox(width: 10),
                         const Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              Text('Government of India', style: TextStyle(fontSize: 12, color: Colors.black54)),
-                              Text('MINISTRY OF ROAD TRANSPORT & HIGHWAYS',
-                                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.indigo)),
+                              //Text('Government of India', style: TextStyle(fontSize: 12, color: Colors.black54)),
+                              Text('Netra Sarthi',
+                                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.indigo)),
                             ],
                           ),
                         ),
