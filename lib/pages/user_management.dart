@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:animate_do/animate_do.dart'; // Import for animations
+import '../services/hash_service.dart';
 
 /// User Management page
 /// - GET  /api/users           -> fetch users
@@ -35,6 +36,7 @@ class _UserManagementPageState extends State<UserManagementPage> {
   final TextEditingController _addEmail = TextEditingController();
   final TextEditingController _addPassword = TextEditingController();
   String _addRole = 'enduser'; // default role
+  final HashService _hasher = HashService();
 
   // NEW: prevent double submissions
   bool _isAdding = false;
@@ -137,10 +139,13 @@ class _UserManagementPageState extends State<UserManagementPage> {
 
     setState(() => _isAdding = true);
 
+    final String hashedPassword = _hasher.hashPassword(_addPassword.text.trim());
+    print("hashedPassword = $hashedPassword");
+
     final payload = {
       'name': _addName.text.trim(),
       'email': _addEmail.text.trim(),
-      'password': _addPassword.text.trim(),
+      'password': hashedPassword,
       'role': _addRole,
     };
 
@@ -269,10 +274,12 @@ class _UserManagementPageState extends State<UserManagementPage> {
     );
 
     if (recreate == true) {
+      final String hashedPassword = _hasher.hashPassword(pwdCtrl.text.trim());
+      print("hashedPassword = $hashedPassword");
       final payload = {
         'name': existingUser['name'] ?? existingUser['email'] ?? 'User',
         'email': existingUser['email'] ?? '${DateTime.now().millisecondsSinceEpoch}@local',
-        'password': pwdCtrl.text.trim(),
+        'password': hashedPassword,
         'role': newRole,
       };
       final uri = Uri.parse('$BASE_URL/api/users');
@@ -421,6 +428,19 @@ class _UserManagementPageState extends State<UserManagementPage> {
     );
   }
 
+  DateTime? _parseTimestampForComparison(dynamic t) {
+    if (t == null) return null;
+    try {
+      if (t is int) {
+        // Assuming timestamps are milliseconds if large (>10 digits), seconds otherwise.
+        return (t.toString().length > 10) ? DateTime.fromMillisecondsSinceEpoch(t) : DateTime.fromMillisecondsSinceEpoch(t * 1000);
+      } else if (t is String) {
+        return DateTime.tryParse(t);
+      }
+    } catch (_) {}
+    return null;
+  }
+
   // UI: user card
   Widget _userCard(Map<String, dynamic> u) {
     final idRaw = u['_id'] ?? u['userId'] ?? u['id'];
@@ -428,7 +448,17 @@ class _UserManagementPageState extends State<UserManagementPage> {
     final name = (u['name'] ?? '').toString();
     final email = (u['email'] ?? '').toString();
     final role = (u['role'] ?? 'enduser').toString();
-    final isActive = u['isActive'] == true;
+
+    // START MODIFICATION: Calculate isActive status based on login/logout times
+    final DateTime? loginTime = _parseTimestampForComparison(u['loginTime']);
+    final DateTime? logoutTime = _parseTimestampForComparison(u['logoutTime']);
+
+    // Logic: Active if login time exists AND (logout time is null OR login time is AFTER logout time)
+    //final bool isActive = loginTime != null && (logoutTime == null || loginTime.isAfter(logoutTime));
+    final bool isActive = loginTime != null && logoutTime != null && (loginTime.isAfter(logoutTime));
+    // END MODIFICATION
+
+    //final isActive = u['isActive'] == true;
     final roleIcon = _getRoleIcon(role);
 
     return FadeInUp(

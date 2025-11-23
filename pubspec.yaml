@@ -47,6 +47,9 @@ dependencies:
   image_picker: ^0.8.7+6
   flutter_html: ^3.0.0-beta.2
   flutter_launcher_icons: ^0.14.4
+  safe_device: ^1.3.8
+  crypto: ^3.0.7
+
   #package_info_plus: ^9.0.0
 
   # The following adds the Cupertino Icons font to your application.

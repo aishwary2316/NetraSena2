@@ -3,11 +3,14 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'hash_service.dart';
 
 class ApiService {
   // === Set this correctly for your environment ===
   static const String backendBaseUrl = 'https://ai-tollgate-surveillance-1.onrender.com';
   static const String faceApiUrl = 'https://face-surveillance-api-777302308889.asia-south1.run.app';
+
+  final HashService _hasher = HashService();
 
   final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
 
@@ -27,10 +30,26 @@ class ApiService {
   // -----------------------------
   Future<Map<String, dynamic>> login(String email, String password) async {
     final uri = Uri.parse('$backendBaseUrl/login');
+    // 1. HASH THE PASSWORD
+    // Input: "operator123"
+    // Output: "a591a6d40bf420404a011733cfb7b190d62c..."
+    final String hashedPassword = _hasher.hashPassword(password);
+    print ("hashedPassword = $hashedPassword");
+
+    // 2. Get Device ID (from previous steps)
+    //final String? deviceId = await _getDeviceId();
+
     try {
+
+      final payload = {
+        'email': email,
+        'password': hashedPassword, // <--- SECURE
+        //'deviceId': deviceId,
+      };
+
       print('ApiService.login -> POST $uri with email=$email');
       final resp = await http
-          .post(uri, headers: {'Content-Type': 'application/json', 'accept': 'application/json'}, body: jsonEncode({'email': email, 'password': password}))
+          .post(uri, headers: {'Content-Type': 'application/json', 'accept': 'application/json'}, body: jsonEncode(payload))
           .timeout(const Duration(seconds: 15));
 
       print('ApiService.login -> statusCode: ${resp.statusCode}');

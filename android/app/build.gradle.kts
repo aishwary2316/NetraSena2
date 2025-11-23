@@ -10,12 +10,17 @@ dependencies {
     implementation("com.google.errorprone:error_prone_annotations:2.36.0")
     implementation("javax.annotation:javax.annotation-api:1.3.2")
     implementation("com.google.crypto.tink:tink-android:1.8.0")
+    implementation("com.google.code.findbugs:jsr305:3.0.2")
 }
 
 android {
     namespace = "com.example.ai_tollgate_survaillance_system"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "27.0.12077973"
+
+    buildFeatures {
+        buildConfig = true
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
