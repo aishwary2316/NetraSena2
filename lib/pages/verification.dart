@@ -4,7 +4,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-
+import '../utils/safe_error.dart';
 import '../services/api_service.dart';
 
 /// Enum for per-field states (top-level; must not be declared inside a class)
@@ -79,7 +79,6 @@ Future<void> showVerificationDialog(
   );
 
   Map<String, dynamic> bodyMap = {};
-  String? errorMessage;
 
   try {
     // Call the main OnRender backend for DL and RC verification
@@ -99,21 +98,27 @@ Future<void> showVerificationDialog(
         bodyMap = {'raw': d};
       }
     } else {
-      // server returned ok=false -> build a helpful message
-      if (result['message'] != null) {
-        errorMessage = result['message'].toString();
-      } else if (result['body'] != null) {
-        try {
-          errorMessage = JsonEncoder.withIndent('  ').convert(result['body']);
-        } catch (_) {
-          errorMessage = result['body'].toString();
-        }
-      } else {
-        errorMessage = 'Verification failed (status unknown)';
+      // Server returned error. Instead of blocking, pass error info to dashboard.
+      if (result['body'] is Map) {
+        bodyMap = Map<String, dynamic>.from(result['body']);
+      }
+
+      final msg = result['message']?.toString() ?? 'Verification failed';
+
+      // Inject ERROR status if data is missing so dashboard cards show the error
+      if (dlNumber != null && !bodyMap.containsKey('dlData')) {
+        bodyMap['dlData'] = {'status': 'ERROR', 'message': msg};
+      }
+      if (rcNumber != null && !bodyMap.containsKey('rcData')) {
+        bodyMap['rcData'] = {'status': 'ERROR', 'message': msg};
       }
     }
   } catch (e) {
-    errorMessage = 'An error occurred during verification: $e';
+    // Handle Network/System errors gracefully
+    //final msg = 'Network/System Error: $e';
+    final msg = SafeError.format(e, fallback: "Something went wrong due to a network/system issue.");
+    if (dlNumber != null) bodyMap['dlData'] = {'status': 'ERROR', 'message': msg};
+    if (rcNumber != null) bodyMap['rcData'] = {'status': 'ERROR', 'message': msg};
   }
 
   // Perform face recognition separately if a driver image is provided
@@ -121,11 +126,14 @@ Future<void> showVerificationDialog(
     try {
       final faceResult = await api.recognizeFace(driverImage.path);
       if (faceResult['ok'] == true) {
+        final d = faceResult['data'];
         // Merge face recognition data into the main bodyMap
         bodyMap['driverData'] = {
-          'status': faceResult['data']['status'],
-          'message': faceResult['data']['message'],
-          'name': faceResult['data']['name'] ?? 'N/A',
+          'status': d['status'],          // Maps directly to "ALERT" or "CLEAR"
+          'message': d['message'],
+          'name': d['name'] ?? 'N/A',     // Only present on ALERT
+          'score': d['score'],            // Confidence score
+          'closest_match': d['closest_match'], // Present on CLEAR
         };
       } else {
         // Set an error status for face recognition
@@ -138,13 +146,13 @@ Future<void> showVerificationDialog(
       // Set an error status if the face recognition call fails
       bodyMap['driverData'] = {
         'status': 'SERVICE_UNAVAILABLE',
-        'message': 'Face recognition network error: $e',
+        //'message': 'Face recognition network error: $e',
+        'message': SafeError.format(e, fallback: "Face recognition network error."),
       };
     }
   }
 
   // Dismiss loading dialog (explicitly target the root navigator that showDialog used).
-  // Use try/catch to avoid throwing if the dialog was already dismissed.
   try {
     Navigator.of(context, rootNavigator: true).pop();
   } catch (_) {
@@ -152,10 +160,7 @@ Future<void> showVerificationDialog(
     if (Navigator.of(context).canPop()) Navigator.of(context).pop();
   }
 
-  if (errorMessage != null) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errorMessage)));
-    return;
-  }
+  // NOTE: Blocking "errorMessage" check removed. We always navigate to dashboard now.
 
   // Ensure bodyMap is non-empty; if empty, create a minimal body so dashboard shows something useful
   if (bodyMap.isEmpty) {
@@ -250,12 +255,16 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
     if (status == 'blacklisted' || status == 'suspicious' || status == 'suspended' || status == 'blocked') {
       return FieldState.suspicious;
     }
-    if (status == 'alert' || status == 'match') {
+    if (status == 'alert' || status == 'match' ) {
       return FieldState.suspicious;
     }
 
+    if (status == 'clear' || status == 'normal' || status == 'not_found' || status == 'n/a') {
+      return FieldState.normal;
+    }
+
     // Service unavailable / error
-    if (status == 'service_unavailable' || status == 'serviceunavailable' || status == 'unavailable') {
+    if (status == 'service_unavailable' || status.contains('unavailable') || status == 'error' || status.contains('fail')) {
       return FieldState.serviceUnavailable;
     }
 
@@ -352,7 +361,8 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error fetching usage: $e')));
+      //ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error fetching usage: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error fetching usage: ${SafeError.format(e, fallback: "Something went wrong")}')));
     } finally {
       setState(() => _fetchingUsage = false);
     }
@@ -821,9 +831,13 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
       );
     }
 
+    // Check if there is an error status
+    bool isError = (data['status'] == 'ERROR');
+    Color cardColor = isError ? Colors.orange.shade50 : Colors.white;
+
     return Container(
       width: double.infinity,
-      decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 4))]),
+      decoration: BoxDecoration(color: cardColor, borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.grey.shade200), boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 4))]),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         // Header
         Container(
@@ -870,7 +884,7 @@ class _VerificationDashboardState extends State<VerificationDashboard> with Tick
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         Text(_formatLabel(key), style: TextStyle(fontSize: 12 * s, fontWeight: FontWeight.w600, color: Colors.grey.shade600, letterSpacing: 0.2)),
                         SizedBox(height: 6 * s),
-                        Text(value, style: TextStyle(fontSize: 15 * s, fontWeight: FontWeight.w600, color: Colors.black87)),
+                        Text(value, style: TextStyle(fontSize: 15 * s, fontWeight: FontWeight.w600, color: isError ? Colors.red : Colors.black87)),
                       ]),
                     ),
                   ]),

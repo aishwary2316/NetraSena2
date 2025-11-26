@@ -11,7 +11,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:http_parser/http_parser.dart';
-
+import '../utils/safe_log.dart';
 import 'verification.dart'; // <- uses verifyDriverAndShowDialog()
 
 class HomePageContent extends StatefulWidget {
@@ -27,12 +27,15 @@ class _HomePageContentState extends State<HomePageContent> {
   final String _verifyBaseUrl = '';
 
   // OCR model endpoints (use the exact working paths)
-  final String _dlOcrUrl = 'https://dl-extractor-service-777302308889.us-central1.run.app';
-  // UPDATED RC API endpoint
+  // FIX: Updated to the new Cloud Run service with /extract
+  final String _dlOcrUrl = 'https://dl-extractor-web-980624091991.us-central1.run.app/extract';
+
+  // RC API endpoint
   final String _rcOcrUrl = 'https://enhanced-alpr-980624091991.us-central1.run.app/recognize_plate/';
 
   // Field names used when sending multipart to each OCR endpoint.
-  final String _dlOcrFieldName = 'image_file';
+  // FIX: Updated DL field to 'file' to match the new API requirements
+  final String _dlOcrFieldName = 'file';
   final String _rcOcrFieldName = 'file';
   // ================================================
 
@@ -156,7 +159,7 @@ class _HomePageContentState extends State<HomePageContent> {
         }
       }
     } catch (e) {
-      debugPrint('[_makeMultipartFromPicked] error: $e');
+      devLog('[_makeMultipartFromPicked] error: $e');
     }
     return null;
   }
@@ -176,20 +179,7 @@ class _HomePageContentState extends State<HomePageContent> {
     controller.text = 'Extracting...';
 
     try {
-      // Fix/append model-specific path if user provided a base host without path
-      String effectiveUrl = uploadUrl;
-      if (effectiveUrl.contains('dl-extractor-service-777302308889.us-central1.run.app') &&
-          !effectiveUrl.contains('extract/')) {
-        effectiveUrl = '${effectiveUrl.replaceAll(RegExp(r'/+$'), '')}/extract/';
-        debugPrint('Adjusted DL URL to: $effectiveUrl');
-      }
-
-      // Choose field candidates: for DL prefer image_file, for RC prefer file
-      final List<String> fieldCandidates = isDlModel
-          ? [primaryFieldName, 'image_file', 'dl_image', 'image', 'file']
-          : [primaryFieldName, 'file'];
-
-      final Uri uri = Uri.parse(effectiveUrl);
+      final Uri uri = Uri.parse(uploadUrl);
 
       // QUICK CHECK: if RC endpoint, ensure chosen file is an image (avoid repeated 400s)
       String? chosenName;
@@ -209,37 +199,33 @@ class _HomePageContentState extends State<HomePageContent> {
         }
       }
 
-      bool success = false;
+      // FIX: Cleaned up logic. No loop, no URL rewriting. Just use the primary field.
+      final mp = await _makeMultipartFromPicked(fieldName: primaryFieldName, xfile: xfile, pfile: pfile);
+      if (mp == null) {
+        devLog('Could not build multipart for field "$primaryFieldName"');
+        _showErrorSnackBar('Failed to process image file.');
+        setExtractingFalse();
+        return;
+      }
 
-      for (final fieldName in fieldCandidates) {
-        final mp = await _makeMultipartFromPicked(fieldName: fieldName, xfile: xfile, pfile: pfile);
-        if (mp == null) {
-          debugPrint('Could not build multipart for field "$fieldName" (likely unsupported file type or missing bytes)');
-          continue;
-        }
+      final req = http.MultipartRequest('POST', uri);
+      req.files.add(mp);
 
-        final req = http.MultipartRequest('POST', uri);
-        req.files.clear();
-        req.files.add(mp);
+      devLog('Posting to $uploadUrl (field="$primaryFieldName")');
 
-        debugPrint('Posting to $effectiveUrl (field="$fieldName")');
-        try {
-          final streamed = await req.send();
-          final res = await http.Response.fromStream(streamed);
+      try {
+        final streamed = await req.send();
+        final res = await http.Response.fromStream(streamed);
 
-          debugPrint('Response status ${res.statusCode} from $effectiveUrl (field="$fieldName")');
+        devLog('Response status ${res.statusCode} from $uploadUrl');
 
-          if (res.statusCode != 200) {
-            debugPrint('Body: ${res.body}');
-            continue;
-          }
-
+        if (res.statusCode == 200) {
           final body = res.body.isNotEmpty ? jsonDecode(res.body) : null;
-
           String? extractedValue;
 
           if (isDlModel) {
-            // 1) prefer dl_numbers[0]
+            // DL Model Response Handling
+            // 1) prefer dl_numbers[0] (New API standard)
             if (body != null && body['dl_numbers'] is List && (body['dl_numbers'] as List).isNotEmpty) {
               final first = (body['dl_numbers'] as List).first;
               if (first != null && first is String && first.trim().isNotEmpty) {
@@ -253,39 +239,8 @@ class _HomePageContentState extends State<HomePageContent> {
               if (t.isNotEmpty) extractedValue = t;
             }
 
-            // 3) fallback: hunt in raw_text for DL-like token
-            if (extractedValue == null && body != null && body['raw_text'] != null) {
-              String raw = (body['raw_text'] as String).toUpperCase();
-              final cleaned = raw.replaceAll(RegExp(r'[^A-Z0-9\s]'), ' ');
-              final tokenReg = RegExp(r'\b([A-Z0-9]{6,25})\b', caseSensitive: false);
-              final matches = tokenReg.allMatches(cleaned).map((m) => m.group(1)!).toList();
-              String? best;
-              for (final tok in matches) {
-                final letters = RegExp(r'[A-Z]').allMatches(tok).length;
-                final digits = RegExp(r'\d').allMatches(tok).length;
-                if (letters >= 1 && digits >= 4) {
-                  best = tok;
-                  break;
-                }
-              }
-              if (best == null) {
-                final loose = RegExp(r'([A-Z]{1,2}\s*\d{2,}\s*[A-Z0-9]{0,3}\s*\d{3,})', caseSensitive: false);
-                final m = loose.firstMatch(raw);
-                if (m != null) best = m.group(1);
-              }
-              if (best != null) {
-                extractedValue = best.replaceAll(RegExp(r'\s+'), '');
-              }
-            }
           } else {
-            // -------- RC model (NEW) --------
-            // New API (enhanced-alpr) returns a structure like:
-            // {
-            //   "success": true,
-            //   "plates_detected": 1,
-            //   "results": [ { "plate_text": "22BH65174", "ocr_confidence": "89.66%", ... } ]
-            // }
-            // We prefer results[0].plate_text when present.
+            // RC model (enhanced-alpr)
             if (body != null && body['results'] is List && (body['results'] as List).isNotEmpty) {
               final firstPlate = (body['results'] as List)[0];
               if (firstPlate is Map) {
@@ -295,17 +250,6 @@ class _HomePageContentState extends State<HomePageContent> {
                 }
               }
             }
-
-            // Defensive legacy fallbacks (rare)
-            if (extractedValue == null && body != null && body['extracted_text'] != null) {
-              final t = (body['extracted_text'] as String).trim();
-              if (t.isNotEmpty) extractedValue = t;
-            } else if (extractedValue == null && body != null && body['raw_text'] != null) {
-              final raw = (body['raw_text'] as String).toUpperCase();
-              final reg = RegExp(r'([A-Z]{2}\s*\d{1,2}\s*[A-Z]{0,2}\s*\d{3,4})', caseSensitive: false);
-              final match = reg.firstMatch(raw);
-              if (match != null) extractedValue = match.group(1)?.replaceAll(RegExp(r'\s+'), '');
-            }
           }
 
           if (extractedValue != null && extractedValue.isNotEmpty) {
@@ -313,25 +257,26 @@ class _HomePageContentState extends State<HomePageContent> {
             if (body != null && body['filename'] != null) {
               setFileName(body['filename'] as String);
             }
-            success = true;
-            debugPrint('OCR success from $effectiveUrl (field="$fieldName"), extracted="$extractedValue"');
-            break;
+            devLog('OCR success, extracted="$extractedValue"');
           } else {
-            debugPrint('OCR returned 200 but no usable text. Body: ${res.body}');
-            continue;
+            devLog('OCR returned 200 but no usable text. Body: ${res.body}');
+            controller.text = '';
+            _showErrorSnackBar('Could not extract text from the image.');
           }
-        } catch (e) {
-          debugPrint('Exception during OCR POST to $effectiveUrl (field="$fieldName"): $e');
-          continue;
+        } else {
+          devLog('OCR failed with status ${res.statusCode}. Body: ${res.body}');
+          controller.text = '';
+          _showErrorSnackBar('OCR Service Failed (${res.statusCode})');
         }
+      } catch (e) {
+        devLog('Exception during OCR POST: $e');
+        controller.text = '';
+        _showErrorSnackBar('Connection error: $e');
       }
 
-      if (!success) {
-        _showErrorSnackBar('OCR failed for the provided endpoint. Check endpoint/field names.');
-        controller.text = '';
-      }
     } catch (err) {
       controller.text = '';
+      devLog('General error in upload: $err');
       _showErrorSnackBar('An error occurred while communicating with the OCR service.');
     } finally {
       setExtractingFalse();
@@ -671,7 +616,7 @@ class _HomePageContentState extends State<HomePageContent> {
         return await _lastDriverXFile!.readAsBytes();
       }
     } catch (e) {
-      debugPrint('[_loadDriverImageBytes] error: $e');
+      devLog('[_loadDriverImageBytes] error: $e');
     }
     return null;
   }

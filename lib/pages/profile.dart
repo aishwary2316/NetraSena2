@@ -1,6 +1,6 @@
 // profile.dart
 import 'package:flutter/material.dart';
-
+import '../utils/safe_log.dart';
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
 

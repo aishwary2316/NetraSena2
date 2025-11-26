@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_html/flutter_html.dart';
-
+import '../utils/safe_log.dart';
 class SnowFoxErrorPage extends StatefulWidget {
   final String errorMessage;
   final VoidCallback? onRetry;
@@ -43,7 +43,7 @@ class _SnowFoxErrorPageState extends State<SnowFoxErrorPage> {
         isLoading = false;
       });
     } catch (e) {
-      print('Error loading HTML files: $e');
+      devLog('Error loading HTML files: $e');
       setState(() {
         errorLoadingHtml = e.toString();
         isLoading = false;
@@ -234,7 +234,7 @@ $htmlContent
       return GestureDetector(
         onTap: () {
           // Handle tap events for snow toggle
-          print('HTML animation tapped');
+          devLog('HTML animation tapped');
         },
         child: Html(
           data: processedHtmlContent!,
@@ -285,7 +285,7 @@ class ErrorPageExample extends StatelessWidget {
         errorMessage: "Oops! Something went wrong.\nPlease try again.",
         onRetry: () {
           // Handle retry logic here
-          debugPrint("Retry button pressed");
+          devLog("Retry button pressed");
         },
       ),
     );

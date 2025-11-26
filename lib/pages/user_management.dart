@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:animate_do/animate_do.dart'; // Import for animations
 import '../services/hash_service.dart';
+import '../services/api_service.dart';
+import '../utils/safe_error.dart';
 
 /// User Management page
 /// - GET  /api/users           -> fetch users
@@ -41,6 +43,15 @@ class _UserManagementPageState extends State<UserManagementPage> {
   // NEW: prevent double submissions
   bool _isAdding = false;
 
+  final ApiService _apiService = ApiService();
+  Future<Map<String, String>> _getHeaders() async {
+    String? token = await _apiService.getToken(); // Retrieve Token
+    return {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer $token', // <--- CRITICAL FIX
+    };
+  }
+
   @override
   void initState() {
     super.initState();
@@ -64,7 +75,9 @@ class _UserManagementPageState extends State<UserManagementPage> {
 
     final uri = Uri.parse('$BASE_URL/api/users');
     try {
-      final res = await http.get(uri).timeout(const Duration(seconds: 15));
+      final headers = await _getHeaders();
+      final res = await http.get(uri, headers: headers).timeout(const Duration(seconds: 15));
+      //final res = await http.get(uri).timeout(const Duration(seconds: 15));
       if (res.statusCode == 200) {
         final body = json.decode(res.body);
         List<Map<String, dynamic>> items = [];
@@ -92,7 +105,9 @@ class _UserManagementPageState extends State<UserManagementPage> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'Error fetching users: $e';
+          //_error = 'Error fetching users: $e';
+          var msg = SafeError.format(e, fallback: "Something went wrong");
+          _error = 'Error fetching users: $msg';
         });
       }
     } finally {
@@ -151,7 +166,13 @@ class _UserManagementPageState extends State<UserManagementPage> {
 
     final uri = Uri.parse('$BASE_URL/api/users');
     try {
-      final res = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: json.encode(payload)).timeout(const Duration(seconds: 15));
+      final headers = await _getHeaders();
+      final res = await http.post(
+          uri,
+          headers: headers, // <--- Attach Token
+          body: json.encode(payload)
+      ).timeout(const Duration(seconds: 15));
+      //final res = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: json.encode(payload)).timeout(const Duration(seconds: 15));
       if (mounted) {
         if (res.statusCode == 201 || res.statusCode == 200) {
           // Important: pop the dialog using the dialog's context so we don't accidentally pop other routes.
@@ -166,7 +187,8 @@ class _UserManagementPageState extends State<UserManagementPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Add error: $e')));
+        //ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Add error: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(SafeError.format(e, fallback: "Something went wrong while adding user"))));
       }
     } finally {
       if (mounted) setState(() => _isAdding = false);
@@ -176,7 +198,9 @@ class _UserManagementPageState extends State<UserManagementPage> {
   Future<void> _deleteUser(String userId) async {
     final uri = Uri.parse('$BASE_URL/api/users/$userId');
     try {
-      final res = await http.delete(uri).timeout(const Duration(seconds: 15));
+      //final res = await http.delete(uri).timeout(const Duration(seconds: 15));
+      final headers = await _getHeaders();
+      final res = await http.delete(uri, headers: headers).timeout(const Duration(seconds: 15));
       if (res.statusCode == 200) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User deleted')));
@@ -189,7 +213,8 @@ class _UserManagementPageState extends State<UserManagementPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+        //ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(SafeError.format(e, fallback: "Something went wrong while deleting user"))));
       }
     }
   }
@@ -199,7 +224,14 @@ class _UserManagementPageState extends State<UserManagementPage> {
   Future<void> _changeRole(String userId, String newRole, Map<String, dynamic> existingUser) async {
     final uri = Uri.parse('$BASE_URL/api/users/$userId');
     try {
-      final res = await http.put(uri, headers: {'Content-Type': 'application/json'}, body: json.encode({'role': newRole})).timeout(const Duration(seconds: 15));
+      //final res = await http.put(uri, headers: {'Content-Type': 'application/json'}, body: json.encode({'role': newRole})).timeout(const Duration(seconds: 15));
+      final headers = await _getHeaders();
+
+      final res = await http.put(
+          uri,
+          headers: headers, // <--- Attach Token
+          body: json.encode({'newRole': newRole}) // Note: server expects 'newRole', not 'role'
+      ).timeout(const Duration(seconds: 15));
       if (res.statusCode == 200) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Role updated')));
@@ -297,7 +329,8 @@ class _UserManagementPageState extends State<UserManagementPage> {
         }
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Recreate error: $e')));
+          //ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Recreate error: $e')));
+          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(SafeError.format(e, fallback: "Something went wrong while creating user"))));
         }
       }
     } else {
@@ -321,7 +354,8 @@ class _UserManagementPageState extends State<UserManagementPage> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+        //ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(SafeError.format(e, fallback: "Something went wrong while deleting user"))));
       }
     }
   }

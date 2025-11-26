@@ -12,7 +12,7 @@ import 'alert_logs.dart';
 import 'blacklist_management.dart';
 import 'settings.dart';
 import 'profile.dart';
-
+import '../utils/safe_log.dart';
 import 'home.dart';
 
 class HomePage extends StatefulWidget {
@@ -56,7 +56,7 @@ class _HomePageState extends State<HomePage> {
         // Call the server endpoint POST /api/logout/:userId
         await _api.logoutServer(userId);
       } catch (e) {
-        print('Server logout failed: $e. Proceeding with local logout.');
+        devLog('Server logout failed: $e. Proceeding with local logout.');
         // Ignore server error and proceed to clear local session
       }
     }

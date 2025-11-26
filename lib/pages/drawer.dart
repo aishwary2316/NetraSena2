@@ -1,6 +1,6 @@
 // drawer.dart
 import 'package:flutter/material.dart';
-
+import '../utils/safe_log.dart';
 typedef DrawerSelectCallback = void Function(BuildContext context, int index, String label);
 
 class AppDrawer extends StatelessWidget {

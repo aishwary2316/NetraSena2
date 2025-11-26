@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'hash_service.dart';
+import '../utils/safe_log.dart';
+import '../utils/safe_error.dart';
 
 class ApiService {
   // === Set this correctly for your environment ===
@@ -34,7 +36,7 @@ class ApiService {
     // Input: "operator123"
     // Output: "a591a6d40bf420404a011733cfb7b190d62c..."
     final String hashedPassword = _hasher.hashPassword(password);
-    print ("hashedPassword = $hashedPassword");
+    devLog ("hashedPassword = $hashedPassword");
 
     // 2. Get Device ID (from previous steps)
     //final String? deviceId = await _getDeviceId();
@@ -47,19 +49,19 @@ class ApiService {
         //'deviceId': deviceId,
       };
 
-      print('ApiService.login -> POST $uri with email=$email');
+      devLog('ApiService.login -> POST $uri with email=$email');
       final resp = await http
           .post(uri, headers: {'Content-Type': 'application/json', 'accept': 'application/json'}, body: jsonEncode(payload))
           .timeout(const Duration(seconds: 15));
 
-      print('ApiService.login -> statusCode: ${resp.statusCode}');
-      print('ApiService.login -> raw body: ${resp.body}');
+      devLog('ApiService.login -> statusCode: ${resp.statusCode}');
+      devLog('ApiService.login -> raw body: ${resp.body}');
 
       dynamic bodyParsed;
       try {
         bodyParsed = resp.body.isNotEmpty ? jsonDecode(resp.body) : {};
       } catch (jsonErr) {
-        print('ApiService.login -> JSON decode failed: $jsonErr');
+        devLog('ApiService.login -> JSON decode failed: $jsonErr');
         return {
           'ok': false,
           'message': 'Server returned non-JSON response (status ${resp.statusCode}). Response body: ${resp.body}'
@@ -74,8 +76,12 @@ class ApiService {
         return {'ok': false, 'message': msg, 'status': resp.statusCode, 'raw': resp.body};
       }
     } catch (e) {
-      print('ApiService.login -> exception: $e');
-      return {'ok': false, 'message': 'Network error: $e'};
+      devLog('ApiService.login -> exception: $e');
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -95,7 +101,11 @@ class ApiService {
         return {'ok': false, 'message': 'Failed to fetch logs (${resp.statusCode})', 'body': _safeJson(resp.body)};
       }
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -148,33 +158,92 @@ class ApiService {
       if (resp.statusCode == 200) return {'ok': true, 'data': body};
       return {'ok': false, 'message': body['message'] ?? 'Verify failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network/upload error: $e'};
+      //return {'ok': false, 'message': 'Network/upload error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Network/upload error: Please try again.")
+      };
     }
   }
 
   // -----------------------------
   // OCR endpoints (multipart)
   // -----------------------------
+  // Future<Map<String, dynamic>> ocrDL(File dlImage) async {
+  //   final uri = Uri.parse('https://dl-extractor-web-980624091991.us-central1.run.app/extract');
+  //   //final uri = Uri.parse('$backendBaseUrl/api/ocr/dl');
+  //   final request = http.MultipartRequest('POST', uri);
+  //   final token = await getToken();
+  //   if (token != null && token.isNotEmpty) request.headers['Authorization'] = 'Bearer $token';
+  //   request.headers['accept'] = 'application/json';
+  //
+  //   request.files.add(await http.MultipartFile.fromPath('file', dlImage.path,
+  //       filename: dlImage.path.split(Platform.pathSeparator).last));
+  //
+  //   try {
+  //     final streamed = await request.send().timeout(const Duration(seconds: 30));
+  //     final resp = await http.Response.fromStream(streamed);
+  //     final body = _safeJson(resp.body);
+  //     if (resp.statusCode == 200) {
+  //       // The new API returns { "success": true, "dl_numbers": ["...", "..."] }
+  //       // We map this to 'extracted_text' so your UI doesn't break.
+  //       String extractedData = '';
+  //       if (body['dl_numbers'] is List) {
+  //         extractedData = (body['dl_numbers'] as List).join(', '); // Join multiple DLs if found
+  //       } else {
+  //         extractedData = body['dl_numbers']?.toString() ?? '';
+  //       }
+  //
+  //       return {'ok': true, 'extracted_text': extractedData, 'data': body};
+  //     }
+  //     return {'ok': false, 'message': body['message'] ?? 'OCR DL failed (${resp.statusCode})', 'body': body};
+  //   } catch (e) {
+  //     return {'ok': false, 'message': 'Network error: $e'};
+  //   }
+  // }
+
+  // -----------------------------
+// OCR endpoints (multipart)
+// -----------------------------
   Future<Map<String, dynamic>> ocrDL(File dlImage) async {
-    final uri = Uri.parse('$backendBaseUrl/api/ocr/dl');
+    // Correct URL from docs
+    final uri = Uri.parse('https://dl-extractor-web-980624091991.us-central1.run.app/extract');
+
     final request = http.MultipartRequest('POST', uri);
-    final token = await getToken();
-    if (token != null && token.isNotEmpty) request.headers['Authorization'] = 'Bearer $token';
+
+    // REMOVED Authorization header (not needed for this specific external service based on docs)
     request.headers['accept'] = 'application/json';
 
-    request.files.add(await http.MultipartFile.fromPath('dlImage', dlImage.path,
-        filename: dlImage.path.split(Platform.pathSeparator).last));
+    // Correct field name 'file' from docs
+    request.files.add(await http.MultipartFile.fromPath(
+        'file',
+        dlImage.path,
+        filename: dlImage.path.split(Platform.pathSeparator).last
+    ));
+
+    devLog("Api Service: Posting to $uri"); // Add debug print
 
     try {
       final streamed = await request.send().timeout(const Duration(seconds: 30));
       final resp = await http.Response.fromStream(streamed);
       final body = _safeJson(resp.body);
+
       if (resp.statusCode == 200) {
-        return {'ok': true, 'extracted_text': body['extracted_text'], 'data': body};
+        String extractedData = '';
+        if (body['dl_numbers'] is List) {
+          extractedData = (body['dl_numbers'] as List).join(', ');
+        } else {
+          extractedData = body['dl_numbers']?.toString() ?? '';
+        }
+        return {'ok': true, 'extracted_text': extractedData, 'data': body};
       }
       return {'ok': false, 'message': body['message'] ?? 'OCR DL failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "OCR DL extraction failed due to a network issue.")
+      };
     }
   }
 
@@ -197,7 +266,11 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'OCR RC failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "OCR RC extraction failed due to a network issue.")
+      };
     }
   }
 
@@ -224,7 +297,11 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Add suspect failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network/upload error: $e'};
+      //return {'ok': false, 'message': 'Network/upload error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Network/upload error: Please try again")
+      };
     }
   }
 
@@ -244,7 +321,11 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -260,7 +341,11 @@ class ApiService {
       if (resp.statusCode == 200) return {'ok': true, 'message': body['message'] ?? 'Marked valid', 'data': body};
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -279,7 +364,11 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -295,7 +384,11 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -313,7 +406,11 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Failed to fetch users (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -328,7 +425,11 @@ class ApiService {
       if (resp.statusCode == 201) return {'ok': true, 'userId': body['userId'], 'message': body['message'], 'data': body};
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -341,7 +442,11 @@ class ApiService {
       if (resp.statusCode == 200) return {'ok': true, 'message': body['message'] ?? 'Deleted', 'data': body};
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -360,7 +465,11 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Failed to logout (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -381,7 +490,11 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -403,7 +516,11 @@ class ApiService {
         return {'ok': false, 'message': 'Failed to fetch suspect list (${resp.statusCode})', 'body': body};
       }
     } catch (e) {
-      return {'ok': false, 'message': 'Network error: $e'};
+      //return {'ok': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -427,7 +544,11 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Recognition failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network/upload error: $e'};
+      //return {'ok': false, 'message': 'Network/upload error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Network/upload error: Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -452,7 +573,11 @@ class ApiService {
       }
       return {'ok': false, 'message': body['detail'] ?? body['message'] ?? 'Add suspect failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      return {'ok': false, 'message': 'Network/upload error: $e'};
+      //return {'ok': false, 'message': 'Network/upload error: $e'};
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Network/upload error: Something went wrong due to a network issue.")
+      };
     }
   }
 
@@ -463,12 +588,12 @@ class ApiService {
       final headers = <String, String>{'Content-Type': 'application/x-www-form-urlencoded', 'accept': 'application/json'};
       if (faceAuthHeader != null) headers.addAll(faceAuthHeader);
 
-      print('ApiService.deleteSuspectFromFace -> POST $uri person_name=$personName');
+      devLog('ApiService.deleteSuspectFromFace -> POST $uri person_name=$personName');
       final resp = await http.post(uri, headers: headers, body: {'person_name': personName}).timeout(const Duration(seconds: 20));
 
       // parse body safely
       final body = _safeJson(resp.body);
-      print('ApiService.deleteSuspectFromFace -> status ${resp.statusCode} bodyParsed=$body');
+      devLog('ApiService.deleteSuspectFromFace -> status ${resp.statusCode} bodyParsed=$body');
 
       // determine "deleted" deterministically
       bool deleted = false;
@@ -486,7 +611,7 @@ class ApiService {
         }
       } catch (e) {
         // ignore parsing exceptions, keep deleted=false
-        print('ApiService.deleteSuspectFromFace -> parsing error: $e');
+        devLog('ApiService.deleteSuspectFromFace -> parsing error: $e');
       }
 
       if (resp.statusCode == 200) {
@@ -510,8 +635,13 @@ class ApiService {
         'raw': resp.body,
       };
     } catch (e) {
-      print('ApiService.deleteSuspectFromFace -> exception: $e');
-      return {'ok': false, 'deleted': false, 'message': 'Network error: $e'};
+      devLog('ApiService.deleteSuspectFromFace -> exception: $e');
+      //return {'ok': false, 'deleted': false, 'message': 'Network error: $e'};
+      return {
+        'ok': false,
+        'deleted': false,
+        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
     }
   }
 }

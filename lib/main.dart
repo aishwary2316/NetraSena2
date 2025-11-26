@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart'; // For kReleaseMode
 import 'package:flutter/material.dart';
 import 'package:safe_device/safe_device.dart'; // Security Package
 import 'pages/auth.dart'; // Your Auth Page
-
+import '../utils/safe_log.dart';
 void main() async {
   // 1. Ensure bindings are initialized before async checks
   WidgetsFlutterBinding.ensureInitialized();
@@ -36,7 +36,7 @@ void main() async {
       // In a high-security context, if the security check crashes,
       // you might choose to fail closed (set isDeviceSecure = false).
       // For now, we just print the error.
-      print("Security check error: $e");
+      devLog("Security check error: $e");
     }
   }
 

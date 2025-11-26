@@ -3,7 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
+import '../utils/safe_log.dart';
 import '../services/api_service.dart';
 import 'home_page.dart';
 
@@ -81,9 +81,9 @@ class _LoginPageState extends State<LoginPage> {
     }
 
     try {
-      print('auth.dart -> attempting login for: $email');
+      devLog('auth.dart -> attempting login for: $email');
       final result = await api.login(email, password);
-      print('auth.dart -> login result: $result');
+      devLog('auth.dart -> login result: $result');
 
       if (result['ok'] == true) {
         final data = result['data'] ?? {};
@@ -130,7 +130,7 @@ class _LoginPageState extends State<LoginPage> {
         }
       }
     } catch (e) {
-      print('auth.dart -> unexpected exception in _signIn: $e');
+      devLog('auth.dart -> unexpected exception in _signIn: $e');
       setState(() {
         _error = 'Unexpected error: $e';
       });

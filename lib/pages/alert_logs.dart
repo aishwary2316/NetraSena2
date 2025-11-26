@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_service.dart';
+import '../utils/safe_log.dart';
 import 'error.dart';
 
 enum _Severity { red, orange, none }
