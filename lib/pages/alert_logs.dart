@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_service.dart';
 import '../utils/safe_log.dart';
+import '../utils/safe_error.dart'; // Import SafeError
+import '../utils/validators.dart'; // Import Validators
 import 'error.dart';
 
 enum _Severity { red, orange, none }
@@ -90,7 +92,8 @@ class _AlertLogsPageState extends State<AlertLogsPage>
       _animationController.forward();
     } catch (e) {
       setState(() {
-        _error = 'Error fetching logs: $e';
+        // SECURITY FIX: Sanitize error message
+        _error = SafeError.format(e, fallback: 'Error fetching alerts.');
       });
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -428,6 +431,9 @@ class _AlertLogsPageState extends State<AlertLogsPage>
                 ),
                 child: TextField(
                   controller: _searchController,
+                  // --- SECURITY UPDATE: Input Formatters ---
+                  inputFormatters: Validators.searchFormatters,
+                  // -----------------------------------------
                   decoration: InputDecoration(
                     hintText: 'Search DL / RC / Reason / Location...',
                     hintStyle: TextStyle(

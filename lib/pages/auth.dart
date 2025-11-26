@@ -3,8 +3,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:local_auth/local_auth.dart'; // Required for Biometrics
+import 'package:flutter/foundation.dart'; // For kDebugMode
 import '../utils/safe_log.dart';
 import '../services/api_service.dart';
+import '../utils/validators.dart'; // Required for Regex Validation
 import 'home_page.dart';
 
 void main() {
@@ -46,6 +49,10 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   final ApiService api = ApiService();
+  final LocalAuthentication auth = LocalAuthentication(); // Biometric Auth
+
+  // Form key to trigger validation
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
@@ -55,22 +62,65 @@ class _LoginPageState extends State<LoginPage> {
   String? _error;
 
   Future<void> _signIn() async {
+    // 1. INPUT VALIDATION
+    // This checks the Validators.validateEmail logic before doing anything else.
+    if (!_formKey.currentState!.validate()) {
+      return;
+    }
+
     setState(() {
       _loading = true;
       _error = null;
     });
 
-    final email = _emailController.text.trim();
-    final password = _passwordController.text;
+    // 2. BIOMETRIC INTERLOCK
+    bool isBiometricAuthenticated = false;
+    try {
+      final bool canCheckBiometrics = await auth.canCheckBiometrics;
 
-    if (email.isEmpty || password.isEmpty) {
+      if (canCheckBiometrics) {
+        isBiometricAuthenticated = await auth.authenticate(
+          localizedReason: 'Officer identity verification required',
+          options: const AuthenticationOptions(
+            biometricOnly: true, // Strict: Do not allow PIN fallback
+            stickyAuth: true,
+          ),
+        );
+      } else {
+        // Fallback for devices without hardware (e.g. older phones)
+        // In a strict environment, you might disable this 'true' fallback.
+        isBiometricAuthenticated = true;
+      }
+    } catch (e) {
+      devLog('Biometric Error: $e');
       setState(() {
-        _error = 'Please enter email and password';
+        _error = 'Biometric verification error';
         _loading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter email and password')));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Biometric Error: $e')),
+        );
+      }
       return;
     }
+
+    if (!isBiometricAuthenticated) {
+      setState(() {
+        _error = 'Biometric authentication failed';
+        _loading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Biometric authentication failed')),
+        );
+      }
+      return;
+    }
+
+    // 3. NETWORK LOGIN
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
 
     bool parseBool(dynamic v) {
       if (v == null) return false;
@@ -165,80 +215,86 @@ class _LoginPageState extends State<LoginPage> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: verticalPadding),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: <Widget>[
-                const Text(
-                  'User Login',
-                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.indigo),
-                ),
-                const SizedBox(height: 24),
-                const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Email', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _emailController,
-                  keyboardType: TextInputType.emailAddress,
-                  decoration: InputDecoration(
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                    hintText: 'someone@example.com',
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 16),
+            child: Form( // Wrapped in Form widget for validation
+              key: _formKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  const Text(
+                    'User Login',
+                    style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: Colors.indigo),
                   ),
-                ),
-                const SizedBox(height: 18),
-                const Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text('Password', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
-                const SizedBox(height: 8),
-                TextField(
-                  controller: _passwordController,
-                  obscureText: !_showPassword,
-                  decoration: InputDecoration(
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                    hintText: 'Shhhh...',
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 16),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Row(
-                  children: <Widget>[
-                    Checkbox(
-                      value: _showPassword,
-                      onChanged: (bool? value) {
-                        setState(() {
-                          _showPassword = value ?? false;
-                        });
-                      },
-                    ),
-                    const Text('Show Password'),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                if (_error != null) Text(_error!, style: const TextStyle(color: Colors.red)),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    onPressed: _loading ? null : _signIn,
-                    style: ElevatedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                      backgroundColor: Colors.indigo[800],
-                    ),
-                    child: _loading
-                        ? const SizedBox(
-                      height: 18,
-                      width: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.white)),
-                    )
-                        : const Text(
-                      'Sign In',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                  const SizedBox(height: 24),
+                  const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Email', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+                  const SizedBox(height: 8),
+                  TextFormField( // Changed to TextFormField
+                    controller: _emailController,
+                    keyboardType: TextInputType.emailAddress,
+                    validator: Validators.validateEmail, // Applied strict email validator
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      hintText: 'someone@example.com',
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 16),
                     ),
                   ),
-                ),
-              ],
+                  const SizedBox(height: 18),
+                  const Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('Password', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
+                  const SizedBox(height: 8),
+                  TextFormField( // Changed to TextFormField
+                    controller: _passwordController,
+                    obscureText: !_showPassword,
+                    // Basic empty check (Injection blocked via Hashing in ApiService)
+                    validator: (v) => (v == null || v.isEmpty) ? 'Password required' : null,
+                    decoration: InputDecoration(
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                      hintText: 'Shhhh...',
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 16),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: <Widget>[
+                      Checkbox(
+                        value: _showPassword,
+                        onChanged: (bool? value) {
+                          setState(() {
+                            _showPassword = value ?? false;
+                          });
+                        },
+                      ),
+                      const Text('Show Password'),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  if (_error != null) Text(_error!, style: const TextStyle(color: Colors.red)),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _loading ? null : _signIn,
+                      style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        backgroundColor: Colors.indigo[800],
+                      ),
+                      child: _loading
+                          ? const SizedBox(
+                        height: 18,
+                        width: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.white)),
+                      )
+                          : const Text(
+                        'Sign In',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         ),

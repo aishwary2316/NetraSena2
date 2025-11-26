@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("kotlin-android")
@@ -5,7 +8,6 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-// In android/app/build.gradle.kts
 dependencies {
     implementation("com.google.errorprone:error_prone_annotations:2.36.0")
     implementation("javax.annotation:javax.annotation-api:1.3.2")
@@ -18,8 +20,11 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = "27.0.12077973"
 
-    buildFeatures {
-        buildConfig = true
+    // 1. Load the key.properties file
+    val keystoreProperties = Properties()
+    val keystorePropertiesFile = rootProject.file("key.properties")
+    if (keystorePropertiesFile.exists()) {
+        keystoreProperties.load(FileInputStream(keystorePropertiesFile))
     }
 
     compileOptions {
@@ -42,17 +47,35 @@ android {
         versionName = flutter.versionName
     }
 
-    buildTypes {
-        release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            isMinifyEnabled = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            signingConfig = signingConfigs.getByName("debug")
+    // 2. Configure the signing key
+    signingConfigs {
+        create("release") {
+            keyAlias = keystoreProperties["keyAlias"] as String? ?: "upload"
+            keyPassword = keystoreProperties["keyPassword"] as String? ?: ""
+            storeFile = if (keystoreProperties["storeFile"] != null) file(keystoreProperties["storeFile"] as String) else null
+            storePassword = keystoreProperties["storePassword"] as String? ?: ""
         }
     }
 
+    buildTypes {
+        release {
+            // 3. Apply the signing config (Fall back to debug if keys are missing)
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                println("Warning: key.properties not found. Release build will not be signed with upload key.")
+                signingConfig = signingConfigs.getByName("debug")
+            }
 
+            // Security & Obfuscation
+            isMinifyEnabled = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
 }
 
 flutter {

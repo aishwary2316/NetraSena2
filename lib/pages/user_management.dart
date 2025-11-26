@@ -6,6 +6,8 @@ import 'package:animate_do/animate_do.dart'; // Import for animations
 import '../services/hash_service.dart';
 import '../services/api_service.dart';
 import '../utils/safe_error.dart';
+import '../utils/safe_log.dart'; // Import Safe Log
+import '../utils/validators.dart'; // Import Validators
 
 /// User Management page
 /// - GET  /api/users           -> fetch users
@@ -44,11 +46,12 @@ class _UserManagementPageState extends State<UserManagementPage> {
   bool _isAdding = false;
 
   final ApiService _apiService = ApiService();
+
   Future<Map<String, String>> _getHeaders() async {
     String? token = await _apiService.getToken(); // Retrieve Token
     return {
       'Content-Type': 'application/json',
-      'Authorization': 'Bearer $token', // <--- CRITICAL FIX
+      'Authorization': 'Bearer $token',
     };
   }
 
@@ -77,7 +80,7 @@ class _UserManagementPageState extends State<UserManagementPage> {
     try {
       final headers = await _getHeaders();
       final res = await http.get(uri, headers: headers).timeout(const Duration(seconds: 15));
-      //final res = await http.get(uri).timeout(const Duration(seconds: 15));
+
       if (res.statusCode == 200) {
         final body = json.decode(res.body);
         List<Map<String, dynamic>> items = [];
@@ -105,7 +108,6 @@ class _UserManagementPageState extends State<UserManagementPage> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          //_error = 'Error fetching users: $e';
           var msg = SafeError.format(e, fallback: "Something went wrong");
           _error = 'Error fetching users: $msg';
         });
@@ -116,6 +118,11 @@ class _UserManagementPageState extends State<UserManagementPage> {
   }
 
   void _filterUsers(String query) {
+    // 1. Sanitize search query to prevent local logic crashes
+    if (query.isNotEmpty && Validators.validateSafeText(query) != null) {
+      return; // Ignore invalid characters
+    }
+
     if (query.trim().isEmpty) {
       if (mounted) {
         setState(() {
@@ -150,12 +157,13 @@ class _UserManagementPageState extends State<UserManagementPage> {
   // NOTE: Now accepts dialogContext so we explicitly pop the dialog route.
   Future<void> _addUser(BuildContext dialogContext) async {
     if (_isAdding) return; // guard
+    // 2. Trigger Validation (uses Validators defined in TextFormFields)
     if (!_addFormKey.currentState!.validate()) return;
 
     setState(() => _isAdding = true);
 
     final String hashedPassword = _hasher.hashPassword(_addPassword.text.trim());
-    print("hashedPassword = $hashedPassword");
+    devLog("hashedPassword = $hashedPassword"); // Safe Log
 
     final payload = {
       'name': _addName.text.trim(),
@@ -169,15 +177,14 @@ class _UserManagementPageState extends State<UserManagementPage> {
       final headers = await _getHeaders();
       final res = await http.post(
           uri,
-          headers: headers, // <--- Attach Token
+          headers: headers, // Attach Token
           body: json.encode(payload)
       ).timeout(const Duration(seconds: 15));
-      //final res = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: json.encode(payload)).timeout(const Duration(seconds: 15));
+
       if (mounted) {
         if (res.statusCode == 201 || res.statusCode == 200) {
-          // Important: pop the dialog using the dialog's context so we don't accidentally pop other routes.
+          // Important: pop the dialog using the dialog's context
           Navigator.of(dialogContext).pop();
-          // Show snackbar using the page's context (this).
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User added')));
           _fetchUsers();
         } else {
@@ -187,7 +194,6 @@ class _UserManagementPageState extends State<UserManagementPage> {
       }
     } catch (e) {
       if (mounted) {
-        //ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Add error: $e')));
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(SafeError.format(e, fallback: "Something went wrong while adding user"))));
       }
     } finally {
@@ -198,7 +204,6 @@ class _UserManagementPageState extends State<UserManagementPage> {
   Future<void> _deleteUser(String userId) async {
     final uri = Uri.parse('$BASE_URL/api/users/$userId');
     try {
-      //final res = await http.delete(uri).timeout(const Duration(seconds: 15));
       final headers = await _getHeaders();
       final res = await http.delete(uri, headers: headers).timeout(const Duration(seconds: 15));
       if (res.statusCode == 200) {
@@ -213,24 +218,21 @@ class _UserManagementPageState extends State<UserManagementPage> {
       }
     } catch (e) {
       if (mounted) {
-        //ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(SafeError.format(e, fallback: "Something went wrong while deleting user"))));
       }
     }
   }
 
   /// Attempt to update role with PUT /api/users/:userId
-  /// If server responds 404/405 or other method not allowed, fallback to asking user whether to delete+recreate.
   Future<void> _changeRole(String userId, String newRole, Map<String, dynamic> existingUser) async {
     final uri = Uri.parse('$BASE_URL/api/users/$userId');
     try {
-      //final res = await http.put(uri, headers: {'Content-Type': 'application/json'}, body: json.encode({'role': newRole})).timeout(const Duration(seconds: 15));
       final headers = await _getHeaders();
 
       final res = await http.put(
           uri,
-          headers: headers, // <--- Attach Token
-          body: json.encode({'newRole': newRole}) // Note: server expects 'newRole', not 'role'
+          headers: headers,
+          body: json.encode({'newRole': newRole})
       ).timeout(const Duration(seconds: 15));
       if (res.statusCode == 200) {
         if (mounted) {
@@ -250,12 +252,10 @@ class _UserManagementPageState extends State<UserManagementPage> {
         return;
       }
 
-      // other non-200 codes: show message
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update failed: ${res.statusCode} ${res.body}')));
       }
     } catch (e) {
-      // network or other error: fallback offer
       final doDelete = await _showConfirmDialog(
         'Could not update user directly: $e\n\nWould you like to delete and recreate the user with the new role?',
       );
@@ -307,7 +307,8 @@ class _UserManagementPageState extends State<UserManagementPage> {
 
     if (recreate == true) {
       final String hashedPassword = _hasher.hashPassword(pwdCtrl.text.trim());
-      print("hashedPassword = $hashedPassword");
+      devLog("hashedPassword = $hashedPassword"); // Safe Log
+
       final payload = {
         'name': existingUser['name'] ?? existingUser['email'] ?? 'User',
         'email': existingUser['email'] ?? '${DateTime.now().millisecondsSinceEpoch}@local',
@@ -316,7 +317,13 @@ class _UserManagementPageState extends State<UserManagementPage> {
       };
       final uri = Uri.parse('$BASE_URL/api/users');
       try {
-        final res = await http.post(uri, headers: {'Content-Type': 'application/json'}, body: json.encode(payload)).timeout(const Duration(seconds: 15));
+        final headers = await _getHeaders();
+        final res = await http.post(
+            uri,
+            headers: headers,
+            body: json.encode(payload)
+        ).timeout(const Duration(seconds: 15));
+
         if (res.statusCode == 201 || res.statusCode == 200) {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User recreated with new role')));
@@ -329,12 +336,10 @@ class _UserManagementPageState extends State<UserManagementPage> {
         }
       } catch (e) {
         if (mounted) {
-          //ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Recreate error: $e')));
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(SafeError.format(e, fallback: "Something went wrong while creating user"))));
         }
       }
     } else {
-      // User cancelled recreate — nothing to do
       _fetchUsers();
     }
   }
@@ -342,7 +347,8 @@ class _UserManagementPageState extends State<UserManagementPage> {
   Future<void> _deleteUserWithToast(String id) async {
     try {
       final uri = Uri.parse('$BASE_URL/api/users/$id');
-      final res = await http.delete(uri).timeout(const Duration(seconds: 15));
+      final headers = await _getHeaders();
+      final res = await http.delete(uri, headers: headers).timeout(const Duration(seconds: 15));
       if (res.statusCode == 200) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('User deleted')));
@@ -354,7 +360,6 @@ class _UserManagementPageState extends State<UserManagementPage> {
       }
     } catch (e) {
       if (mounted) {
-        //ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Delete failed: $e')));
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(SafeError.format(e, fallback: "Something went wrong while deleting user"))));
       }
     }
@@ -397,9 +402,10 @@ class _UserManagementPageState extends State<UserManagementPage> {
             key: _addFormKey,
             child: SingleChildScrollView(
               child: Column(mainAxisSize: MainAxisSize.min, children: [
-                TextFormField(
+                TextFormField( // Changed to TextFormField
                   controller: _addName,
-                  validator: (v) => v == null || v.trim().isEmpty ? 'Name required' : null,
+                  // 3. Applied Strict Validator for Name
+                  validator: (v) => Validators.validateSafeText(v, fieldName: 'Name'),
                   decoration: InputDecoration(
                     labelText: 'Name',
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
@@ -407,9 +413,10 @@ class _UserManagementPageState extends State<UserManagementPage> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                TextFormField(
+                TextFormField( // Changed to TextFormField
                   controller: _addEmail,
-                  validator: (v) => v == null || v.trim().isEmpty ? 'Email required' : null,
+                  // 3. Applied Strict Validator for Email
+                  validator: Validators.validateEmail,
                   decoration: InputDecoration(
                     labelText: 'Email',
                     border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
@@ -417,9 +424,10 @@ class _UserManagementPageState extends State<UserManagementPage> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                TextFormField(
+                TextFormField( // Changed to TextFormField
                   controller: _addPassword,
-                  validator: (v) => v == null || v.trim().isEmpty ? 'Password required' : null,
+                  // Basic check as hashing handles safety, but must not be empty
+                  validator: (v) => (v == null || v.isEmpty) ? 'Password required' : null,
                   obscureText: true,
                   decoration: InputDecoration(
                     labelText: 'Password',
@@ -466,7 +474,6 @@ class _UserManagementPageState extends State<UserManagementPage> {
     if (t == null) return null;
     try {
       if (t is int) {
-        // Assuming timestamps are milliseconds if large (>10 digits), seconds otherwise.
         return (t.toString().length > 10) ? DateTime.fromMillisecondsSinceEpoch(t) : DateTime.fromMillisecondsSinceEpoch(t * 1000);
       } else if (t is String) {
         return DateTime.tryParse(t);
@@ -483,16 +490,10 @@ class _UserManagementPageState extends State<UserManagementPage> {
     final email = (u['email'] ?? '').toString();
     final role = (u['role'] ?? 'enduser').toString();
 
-    // START MODIFICATION: Calculate isActive status based on login/logout times
     final DateTime? loginTime = _parseTimestampForComparison(u['loginTime']);
     final DateTime? logoutTime = _parseTimestampForComparison(u['logoutTime']);
 
-    // Logic: Active if login time exists AND (logout time is null OR login time is AFTER logout time)
-    //final bool isActive = loginTime != null && (logoutTime == null || loginTime.isAfter(logoutTime));
-    final bool isActive = loginTime != null && logoutTime != null && (loginTime.isAfter(logoutTime));
-    // END MODIFICATION
-
-    //final isActive = u['isActive'] == true;
+    final bool isActive = loginTime != null && (logoutTime == null || loginTime.isAfter(logoutTime));
     final roleIcon = _getRoleIcon(role);
 
     return FadeInUp(
@@ -502,7 +503,7 @@ class _UserManagementPageState extends State<UserManagementPage> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         child: InkWell(
           borderRadius: BorderRadius.circular(16),
-          onTap: () {}, // Could show user details
+          onTap: () {},
           child: Padding(
             padding: const EdgeInsets.all(16.0),
             child: Row(
@@ -523,7 +524,7 @@ class _UserManagementPageState extends State<UserManagementPage> {
                       const SizedBox(height: 4),
                       Text(email, style: const TextStyle(color: Colors.black54)),
                       const SizedBox(height: 8),
-                      Wrap( // Using Wrap to prevent overflow on small screens
+                      Wrap(
                         spacing: 8,
                         runSpacing: 8,
                         children: [
@@ -667,7 +668,7 @@ class _UserManagementPageState extends State<UserManagementPage> {
         title: const Text('Raw JSON'),
         content: SizedBox(
           width: MediaQuery.of(ctx).size.width * 0.8,
-          child: SingleChildScrollView(child: Text(const JsonEncoder.withIndent('  ').convert(item))),
+          child: SingleChildScrollView(child: SelectableText(const JsonEncoder.withIndent('  ').convert(item))),
         ),
         actions: [TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close'))],
       ),

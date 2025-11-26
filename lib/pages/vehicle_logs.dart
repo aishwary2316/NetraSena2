@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_service.dart';
 import '../utils/safe_log.dart';
+import '../utils/safe_error.dart'; // Import SafeError
+import '../utils/validators.dart'; // Import Validators
+
 class VehicleLogsPage extends StatefulWidget {
   const VehicleLogsPage({super.key});
 
@@ -82,7 +85,8 @@ class _VehicleLogsPageState extends State<VehicleLogsPage>
       }
     } catch (e) {
       setState(() {
-        _error = 'Error fetching logs: $e';
+        // SECURITY FIX: Sanitize error message
+        _error = SafeError.format(e, fallback: 'Unable to load vehicle logs.');
       });
     } finally {
       if (mounted) {
@@ -499,6 +503,9 @@ class _VehicleLogsPageState extends State<VehicleLogsPage>
           child: TextField(
             controller: _searchController,
             focusNode: _searchFocus,
+            // --- SECURITY UPDATE: Input Formatters ---
+            inputFormatters: Validators.searchFormatters,
+            // -----------------------------------------
             decoration: InputDecoration(
               hintText: 'Search vehicle, driver, DL, RC...',
               hintStyle: TextStyle(

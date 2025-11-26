@@ -49,6 +49,7 @@ dependencies:
   flutter_launcher_icons: ^0.14.4
   safe_device: ^1.3.8
   crypto: ^3.0.7
+  local_auth: ^2.1.6
 
   #package_info_plus: ^9.0.0
 

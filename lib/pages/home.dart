@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:http_parser/http_parser.dart';
 import '../utils/safe_log.dart';
+import '../utils/validators.dart'; // Import Validators
 import 'verification.dart'; // <- uses verifyDriverAndShowDialog()
 
 class HomePageContent extends StatefulWidget {
@@ -27,14 +28,12 @@ class _HomePageContentState extends State<HomePageContent> {
   final String _verifyBaseUrl = '';
 
   // OCR model endpoints (use the exact working paths)
-  // FIX: Updated to the new Cloud Run service with /extract
   final String _dlOcrUrl = 'https://dl-extractor-web-980624091991.us-central1.run.app/extract';
 
   // RC API endpoint
   final String _rcOcrUrl = 'https://enhanced-alpr-980624091991.us-central1.run.app/recognize_plate/';
 
   // Field names used when sending multipart to each OCR endpoint.
-  // FIX: Updated DL field to 'file' to match the new API requirements
   final String _dlOcrFieldName = 'file';
   final String _rcOcrFieldName = 'file';
   // ================================================
@@ -48,6 +47,9 @@ class _HomePageContentState extends State<HomePageContent> {
   // Controllers & state for the Home UI
   final TextEditingController _dlController = TextEditingController();
   final TextEditingController _rcController = TextEditingController();
+
+  // Form Key for Validation
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
 
   String? _dlImageName;
   String? _rcImageName;
@@ -291,6 +293,11 @@ class _HomePageContentState extends State<HomePageContent> {
       onCamera: () async {
         final XFile? picked = await _imagePicker.pickImage(source: ImageSource.camera, imageQuality: 85);
         if (picked != null) {
+          // SECURITY: Validate Magic Bytes
+          if (!kIsWeb && !await Validators.isValidImage(File(picked.path))) {
+            _showErrorSnackBar('Security Error: Invalid file format.');
+            return;
+          }
           setState(() {
             _dlImageName = picked.name;
             _lastDlXFile = picked;
@@ -311,6 +318,11 @@ class _HomePageContentState extends State<HomePageContent> {
       onGallery: () async {
         final XFile? picked = await _imagePicker.pickImage(source: ImageSource.gallery, imageQuality: 85);
         if (picked != null) {
+          // SECURITY: Validate Magic Bytes
+          if (!kIsWeb && !await Validators.isValidImage(File(picked.path))) {
+            _showErrorSnackBar('Security Error: Invalid file format.');
+            return;
+          }
           setState(() {
             _dlImageName = picked.name;
             _lastDlXFile = picked;
@@ -336,6 +348,21 @@ class _HomePageContentState extends State<HomePageContent> {
         );
         if (result != null && result.files.isNotEmpty) {
           final pfile = result.files.single;
+          // SECURITY: Validate Magic Bytes (if file path exists)
+          if (!kIsWeb && pfile.path != null) {
+            if (!await Validators.isValidImage(File(pfile.path!))) {
+              // If it's a PDF, isValidImage returns false (as it checks for images).
+              // If you support PDF uploading, you might need a separate check or relax this.
+              // Assuming Strict Image Policy for now based on previous context,
+              // but if PDF is allowed by FilePicker above, we must check if it really is an image or handle PDF separately.
+              // For now, we only validate if the extension suggests it is an image.
+              if (_isImageFilename(pfile.name)) {
+                _showErrorSnackBar('Security Error: Invalid image file.');
+                return;
+              }
+            }
+          }
+
           setState(() {
             _dlImageName = pfile.name;
             _lastDlPFile = pfile;
@@ -362,6 +389,11 @@ class _HomePageContentState extends State<HomePageContent> {
       onCamera: () async {
         final XFile? picked = await _imagePicker.pickImage(source: ImageSource.camera, imageQuality: 85);
         if (picked != null) {
+          // SECURITY: Validate Magic Bytes
+          if (!kIsWeb && !await Validators.isValidImage(File(picked.path))) {
+            _showErrorSnackBar('Security Error: Invalid file format.');
+            return;
+          }
           setState(() {
             _rcImageName = picked.name;
             _lastRcXFile = picked;
@@ -382,6 +414,11 @@ class _HomePageContentState extends State<HomePageContent> {
       onGallery: () async {
         final XFile? picked = await _imagePicker.pickImage(source: ImageSource.gallery, imageQuality: 85);
         if (picked != null) {
+          // SECURITY: Validate Magic Bytes
+          if (!kIsWeb && !await Validators.isValidImage(File(picked.path))) {
+            _showErrorSnackBar('Security Error: Invalid file format.');
+            return;
+          }
           setState(() {
             _rcImageName = picked.name;
             _lastRcXFile = picked;
@@ -407,6 +444,13 @@ class _HomePageContentState extends State<HomePageContent> {
         );
         if (result != null && result.files.isNotEmpty) {
           final pfile = result.files.single;
+          // SECURITY: Validate Magic Bytes if path exists and it claims to be an image
+          if (!kIsWeb && pfile.path != null && _isImageFilename(pfile.name)) {
+            if (!await Validators.isValidImage(File(pfile.path!))) {
+              _showErrorSnackBar('Security Error: Invalid image file.');
+              return;
+            }
+          }
           setState(() {
             _rcImageName = pfile.name;
             _lastRcPFile = pfile;
@@ -453,6 +497,11 @@ class _HomePageContentState extends State<HomePageContent> {
       onCamera: () async {
         final XFile? picked = await _imagePicker.pickImage(source: ImageSource.camera, imageQuality: 85);
         if (picked != null) {
+          // SECURITY: Validate Magic Bytes
+          if (!kIsWeb && !await Validators.isValidImage(File(picked.path))) {
+            _showErrorSnackBar('Security Error: Invalid file format.');
+            return;
+          }
           setState(() {
             _driverImageName = picked.name;
             _lastDriverXFile = picked;
@@ -463,6 +512,11 @@ class _HomePageContentState extends State<HomePageContent> {
       onGallery: () async {
         final XFile? picked = await _imagePicker.pickImage(source: ImageSource.gallery, imageQuality: 85);
         if (picked != null) {
+          // SECURITY: Validate Magic Bytes
+          if (!kIsWeb && !await Validators.isValidImage(File(picked.path))) {
+            _showErrorSnackBar('Security Error: Invalid file format.');
+            return;
+          }
           setState(() {
             _driverImageName = picked.name;
             _lastDriverXFile = picked;
@@ -474,6 +528,13 @@ class _HomePageContentState extends State<HomePageContent> {
         final result = await FilePicker.platform.pickFiles(type: FileType.image, withData: true);
         if (result != null && result.files.isNotEmpty) {
           final pfile = result.files.single;
+          // SECURITY: Validate Magic Bytes
+          if (!kIsWeb && pfile.path != null) {
+            if (!await Validators.isValidImage(File(pfile.path!))) {
+              _showErrorSnackBar('Security Error: Invalid image file.');
+              return;
+            }
+          }
           setState(() {
             _driverImageName = pfile.name;
             _lastDriverPFile = pfile;
@@ -541,6 +602,11 @@ class _HomePageContentState extends State<HomePageContent> {
 
   // ---------------- Verification: delegate to verification.dart ----------
   Future<void> _handleVerification() async {
+    // 1. FORM VALIDATION (Regex)
+    if (_formKey.currentState != null && !_formKey.currentState!.validate()) {
+      return;
+    }
+
     final dlNumber = _dlController.text.trim();
     final rcNumber = _rcController.text.trim();
 
@@ -742,168 +808,179 @@ class _HomePageContentState extends State<HomePageContent> {
             // Main form container
             Padding(
               padding: EdgeInsets.symmetric(horizontal: horizontalPadding),
-              child: Container(
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.05),
-                      blurRadius: 10,
-                      offset: const Offset(0, 4),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Driving License Section
-                    _buildSectionHeader(
-                      icon: Icons.credit_card,
-                      title: 'Upload Driving License',
-                      subtitle: 'Upload your driving license document',
-                    ),
-                    const SizedBox(height: 16),
+              child: Form(
+                key: _formKey,
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.05),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Driving License Section
+                      _buildSectionHeader(
+                        icon: Icons.credit_card,
+                        title: 'Upload Driving License',
+                        subtitle: 'Upload your driving license document',
+                      ),
+                      const SizedBox(height: 16),
 
-                    _buildFileUploadCard(
-                      label: 'Choose Driving License File',
-                      fileName: _dlImageName,
-                      onTap: _pickDlImage,
-                      icon: Icons.upload_file,
-                      isDriver: false,
-                    ),
+                      _buildFileUploadCard(
+                        label: 'Choose Driving License File',
+                        fileName: _dlImageName,
+                        onTap: _pickDlImage,
+                        icon: Icons.upload_file,
+                        isDriver: false,
+                      ),
 
-                    const SizedBox(height: 12),
+                      const SizedBox(height: 12),
 
-                    _buildTextInput(
-                      controller: _dlController,
-                      label: 'Driving License Number',
-                      hint: _dlExtracting ? 'Extracting...' : 'Select image or enter manually',
-                      prefixIcon: Icons.confirmation_number,
-                      enabled: !_dlExtracting,
-                    ),
+                      _buildTextInput(
+                        controller: _dlController,
+                        label: 'Driving License Number',
+                        hint: _dlExtracting ? 'Extracting...' : 'Select image or enter manually',
+                        prefixIcon: Icons.confirmation_number,
+                        enabled: !_dlExtracting,
+                        // VALIDATION: Only check regex if field is populated (optional field logic)
+                        validator: (v) => (v != null && v.trim().isNotEmpty)
+                            ? Validators.validateID(v, type: 'DL Number')
+                            : null,
+                      ),
 
-                    const SizedBox(height: 24),
+                      const SizedBox(height: 24),
 
-                    // Vehicle Registration Section
-                    _buildSectionHeader(
-                      icon: Icons.directions_car,
-                      title: 'Upload Vehicle Registration Number (Number Plate Number)',
-                      subtitle: 'Upload your vehicle registration certificate',
-                    ),
-                    const SizedBox(height: 16),
+                      // Vehicle Registration Section
+                      _buildSectionHeader(
+                        icon: Icons.directions_car,
+                        title: 'Upload Vehicle Registration Number (Number Plate Number)',
+                        subtitle: 'Upload your vehicle registration certificate',
+                      ),
+                      const SizedBox(height: 16),
 
-                    _buildFileUploadCard(
-                      label: 'Choose Vehicle Registration File',
-                      fileName: _rcImageName,
-                      onTap: _pickRcImage,
-                      icon: Icons.upload_file,
-                      isDriver: false,
-                    ),
+                      _buildFileUploadCard(
+                        label: 'Choose Vehicle Registration File',
+                        fileName: _rcImageName,
+                        onTap: _pickRcImage,
+                        icon: Icons.upload_file,
+                        isDriver: false,
+                      ),
 
-                    const SizedBox(height: 12),
+                      const SizedBox(height: 12),
 
-                    _buildTextInput(
-                      controller: _rcController,
-                      label: 'Vehicle Number',
-                      hint: _rcExtracting ? 'Extracting...' : 'Select image or enter manually',
-                      prefixIcon: Icons.directions_car,
-                      enabled: !_rcExtracting,
-                      // Show refresh button when an RC image is present; pressing it will re-call the RC API.
-                      showAlternateButton: (_lastRcXFile != null || _lastRcPFile != null),
-                      onAlternatePressed: _refreshRcExtraction,
-                    ),
+                      _buildTextInput(
+                        controller: _rcController,
+                        label: 'Vehicle Number',
+                        hint: _rcExtracting ? 'Extracting...' : 'Select image or enter manually',
+                        prefixIcon: Icons.directions_car,
+                        enabled: !_rcExtracting,
+                        // Show refresh button when an RC image is present; pressing it will re-call the RC API.
+                        showAlternateButton: (_lastRcXFile != null || _lastRcPFile != null),
+                        onAlternatePressed: _refreshRcExtraction,
+                        // VALIDATION
+                        validator: (v) => (v != null && v.trim().isNotEmpty)
+                            ? Validators.validateID(v, type: 'Vehicle Number')
+                            : null,
+                      ),
 
-                    const SizedBox(height: 24),
+                      const SizedBox(height: 24),
 
-                    // Driver Image Section
-                    _buildSectionHeader(
-                      icon: Icons.person,
-                      title: 'Upload Driver Image',
-                      subtitle: 'Upload a clear photo of the driver',
-                    ),
-                    const SizedBox(height: 16),
+                      // Driver Image Section
+                      _buildSectionHeader(
+                        icon: Icons.person,
+                        title: 'Upload Driver Image',
+                        subtitle: 'Upload a clear photo of the driver',
+                      ),
+                      const SizedBox(height: 16),
 
-                    _buildFileUploadCard(
-                      label: 'Choose Driver Image File',
-                      fileName: _driverImageName,
-                      onTap: _pickDriverImage,
-                      icon: Icons.person_add_alt_1,
-                      isDriver: true, // <--- show thumbnail + preview behavior
-                    ),
+                      _buildFileUploadCard(
+                        label: 'Choose Driver Image File',
+                        fileName: _driverImageName,
+                        onTap: _pickDriverImage,
+                        icon: Icons.person_add_alt_1,
+                        isDriver: true, // <--- show thumbnail + preview behavior
+                      ),
 
-                    const SizedBox(height: 32),
+                      const SizedBox(height: 32),
 
-                    // Verify Information Button
-                    SizedBox(
-                      width: double.infinity,
-                      height: 56,
-                      child: ElevatedButton(
-                        onPressed: _isVerifying ? null : _handleVerification,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: _primaryBlue,
-                          foregroundColor: Colors.white,
-                          elevation: 2,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
+                      // Verify Information Button
+                      SizedBox(
+                        width: double.infinity,
+                        height: 56,
+                        child: ElevatedButton(
+                          onPressed: _isVerifying ? null : _handleVerification,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: _primaryBlue,
+                            foregroundColor: Colors.white,
+                            elevation: 2,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            disabledBackgroundColor: Colors.grey.shade400,
                           ),
-                          disabledBackgroundColor: Colors.grey.shade400,
+                          child: _isVerifying
+                              ? Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                ),
+                              ),
+                              SizedBox(width: 12),
+                              Text('Verifying...', style: TextStyle(fontSize: 16)),
+                            ],
+                          )
+                              : Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: const [
+                              Icon(Icons.verified_user, size: 20),
+                              SizedBox(width: 8),
+                              Text('Verify Information', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                            ],
+                          ),
                         ),
-                        child: _isVerifying
-                            ? Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: const [
-                            SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+
+                      const SizedBox(height: 16),
+
+                      // Info note
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.blue.shade50,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: Colors.blue.shade200),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(Icons.info_outline, color: Colors.blue.shade600, size: 16),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'AI-powered verification will extract information from uploaded documents automatically.',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.blue.shade700,
+                                ),
                               ),
                             ),
-                            SizedBox(width: 12),
-                            Text('Verifying...', style: TextStyle(fontSize: 16)),
-                          ],
-                        )
-                            : Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: const [
-                            Icon(Icons.verified_user, size: 20),
-                            SizedBox(width: 8),
-                            Text('Verify Information', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                           ],
                         ),
                       ),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // Info note
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.blue.shade50,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: Colors.blue.shade200),
-                      ),
-                      child: Row(
-                        children: [
-                          Icon(Icons.info_outline, color: Colors.blue.shade600, size: 16),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'AI-powered verification will extract information from uploaded documents automatically.',
-                              style: TextStyle(
-                                fontSize: 12,
-                                color: Colors.blue.shade700,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -1052,10 +1129,12 @@ class _HomePageContentState extends State<HomePageContent> {
     bool enabled = true,
     bool showAlternateButton = false,
     VoidCallback? onAlternatePressed,
+    String? Function(String?)? validator, // ADDED VALIDATOR PARAM
   }) {
     return TextFormField(
       controller: controller,
       enabled: enabled,
+      validator: validator, // PASSED VALIDATOR
       style: const TextStyle(fontSize: 14),
       decoration: InputDecoration(
         labelText: label,

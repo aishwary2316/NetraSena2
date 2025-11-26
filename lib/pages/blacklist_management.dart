@@ -4,10 +4,11 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http; // [FIX] Added http import
+import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import '../utils/safe_log.dart';
 import '../services/api_service.dart';
+import '../utils/validators.dart'; // Added Validators
 import 'error.dart';
 
 /// Blacklist Management
@@ -24,7 +25,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     with SingleTickerProviderStateMixin {
   final ApiService _api = ApiService();
 
-  // [FIX] Explicitly define Base URL
+  // Explicitly define Base URL
   static const String BASE_URL = 'https://ai-tollgate-surveillance-1.onrender.com';
 
   final int _limit = 20;
@@ -134,7 +135,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     super.dispose();
   }
 
-  // [FIX] Helper to get Headers with Token
+  // Helper to get Headers with Token
   Future<Map<String, String>> _getHeaders() async {
     final token = await _api.getToken();
     return {
@@ -155,7 +156,12 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     });
 
     final q = _dlSearchCtrl.text.trim();
-    // [FIX] Use Direct HTTP with Headers
+    // Sanitize search query slightly to prevent crash in URL encoding
+    if (q.isNotEmpty && Validators.validateSafeText(q) != null) {
+      // Only log internally, don't stop user typing
+      devLog('Invalid search char in DL query');
+    }
+
     final uri = Uri.parse(
         '$BASE_URL/api/blacklist/dl?page=$page&limit=$_limit${q.isNotEmpty ? '&search=${Uri.encodeQueryComponent(q)}' : ''}');
 
@@ -169,7 +175,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         int pageGot = page;
         int totalGot = 0;
 
-        // Handle robust parsing for pagination/lists
         if (body is Map) {
           final rawList = body['data'] ?? body['items'] ?? body['results'] ?? body;
           if (rawList is List) {
@@ -186,20 +191,23 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
         if (!mounted) return;
         setState(() {
-          if (page == 1)
+          if (page == 1) {
             _dlList = dataList;
-          else
+          } else {
             _dlList.addAll(dataList);
+          }
           _dlTotal = totalGot;
           _dlPage = pageGot;
         });
       } else {
         if (!mounted) return;
         setState(() => _errorDL = body['message'] ?? 'Failed to load DL blacklist');
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_errorDL!)));
       }
     } catch (e) {
       if (!mounted) return;
       setState(() => _errorDL = 'Error loading DL blacklist: $e');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_errorDL!)));
     } finally {
       if (!mounted) return;
       setState(() => _loadingDL = false);
@@ -214,7 +222,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     });
 
     final q = _rcSearchCtrl.text.trim();
-    // [FIX] Use Direct HTTP with Headers
     final uri = Uri.parse(
         '$BASE_URL/api/blacklist/rc?page=$page&limit=$_limit${q.isNotEmpty ? '&search=${Uri.encodeQueryComponent(q)}' : ''}');
 
@@ -244,20 +251,23 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
         if (!mounted) return;
         setState(() {
-          if (page == 1)
+          if (page == 1) {
             _rcList = dataList;
-          else
+          } else {
             _rcList.addAll(dataList);
+          }
           _rcTotal = totalGot;
           _rcPage = pageGot;
         });
       } else {
         if (!mounted) return;
         setState(() => _errorRC = body['message'] ?? 'Failed to load RC blacklist');
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_errorRC!)));
       }
     } catch (e) {
       if (!mounted) return;
       setState(() => _errorRC = 'Error loading RC blacklist: $e');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_errorRC!)));
     } finally {
       if (!mounted) return;
       setState(() => _loadingRC = false);
@@ -265,7 +275,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
   }
 
   Future<void> _fetchFaces() async {
-    // Keeps using _api because it points to faceApiUrl (different service)
     if (!mounted) return;
     setState(() {
       _loadingFace = true;
@@ -322,13 +331,16 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         });
       } else {
         if (!mounted) return;
-        setState(() => _errorFace = (resp is Map)
+        final msg = (resp is Map)
             ? resp['message'] ?? 'Failed to load face suspects'
-            : 'Failed to load face suspects');
+            : 'Failed to load face suspects';
+        setState(() => _errorFace = msg);
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       }
     } catch (e) {
       if (!mounted) return;
       setState(() => _errorFace = 'Error loading face suspects: $e');
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_errorFace!)));
     } finally {
       if (!mounted) return;
       setState(() => _loadingFace = false);
@@ -382,14 +394,14 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
     if (!mounted) return;
     setState(() {
-      if (type == 'dl')
+      if (type == 'dl') {
         _loadingDL = true;
-      else
+      } else {
         _loadingRC = true;
+      }
     });
 
     try {
-      // [FIX] Use Direct HTTP POST with Headers
       final uri = Uri.parse('$BASE_URL/api/blacklist');
       final headers = await _getHeaders();
 
@@ -399,15 +411,16 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       final resp = jsonDecode(res.body);
 
       if (!mounted) return;
-      // Accept both 200 and 201
+
       if (res.statusCode == 200 || res.statusCode == 201) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Added to blacklist successfully!'),
             backgroundColor: Colors.green));
-        if (type == 'dl')
+        if (type == 'dl') {
           await _fetchDLs(page: 1);
-        else
+        } else {
           await _fetchRCs(page: 1);
+        }
         Navigator.of(context).pop();
       } else {
         final msg = resp['message'] ?? 'Failed to add';
@@ -427,7 +440,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     }
   }
 
-  // ... (Keep existing Face helpers: _mapIndicatesDeleted, _isPersonPresentInFaceListResponse) ...
+  // Helpers for Face deletions
   bool _mapIndicatesDeleted(dynamic obj) {
     try {
       if (obj == null) return false;
@@ -510,7 +523,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
   }
 
   Future<bool> _deleteFaceSuspectApi(String personName) async {
-    // Keep using ApiService as Face API logic is different
     try {
       final dynamic raw = await _api.deleteSuspectFromFace(personName);
       if (raw == null) return false;
@@ -522,7 +534,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
           if (_mapIndicatesDeleted(raw)) return true;
           return true;
         } else {
-          // fallback heuristics
           if (raw.containsKey('data') && _mapIndicatesDeleted(raw['data'])) return true;
           if (_mapIndicatesDeleted(raw)) return true;
           return false;
@@ -530,7 +541,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       }
       return false;
     } catch (e) {
-      // Last-resort check if suspect is gone
       try {
         final listResp = await _api.listSuspects();
         if (listResp is Map && listResp['ok'] == true) {
@@ -544,12 +554,24 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
   }
 
   Future<void> _addFaceSuspect() async {
-    // Keep using ApiService for multipart handling
     if (!_faceAddFormKey.currentState!.validate()) return;
     if (_faceAddImage == null) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('Please select an image'), backgroundColor: Colors.red));
+      return;
+    }
+
+    // NEW: Validate Image Magic Bytes
+    final file = File(_faceAddImage!.path);
+    if (!await Validators.isValidImage(file)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Security Error: The file is corrupted or not a valid image.'),
+          backgroundColor: Colors.red,
+        ),
+      );
       return;
     }
 
@@ -601,15 +623,12 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
   Future<bool> _markValid(String type, String id) async {
     try {
-      // [FIX] Use Direct HTTP PUT with Headers
       final uri = Uri.parse('$BASE_URL/api/blacklist/$type/$id');
       final headers = await _getHeaders();
 
       final res = await http.put(uri, headers: headers).timeout(const Duration(seconds: 12));
       final resp = jsonDecode(res.body);
 
-      // Note: server_r.js says "Not implemented" (501) for this route currently.
-      // But if updated on backend, this client code is now correct.
       if (res.statusCode == 200) {
         if (mounted)
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -783,9 +802,6 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       ),
     );
   }
-
-  // ... (Remaining UI methods: _buildFaceListContent, _convertGsUrlToHttp, _buildSubtitle, _showConfirmDialog, _showAddBottomSheet, _showEntryDetails, _showSuspectDetails, build) ...
-  // These remain identical to your original file, so I will paste them below for a complete file.
 
   Widget _buildFaceListContent(String? error, bool loading, ScrollController scrollController) {
     if (loading && _faceMap.isEmpty) {
@@ -1043,8 +1059,8 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                           controller: _faceAddName,
                           decoration: const InputDecoration(
                               labelText: 'Suspect Name', border: OutlineInputBorder()),
-                          validator: (v) =>
-                          v == null || v.trim().isEmpty ? 'Name is required' : null,
+                          // ADDED VALIDATOR
+                          validator: (v) => Validators.validateSafeText(v, fieldName: 'Suspect Name'),
                         ),
                         const SizedBox(height: 16),
                         Column(
@@ -1092,9 +1108,8 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                       ] else ...[
                         TextFormField(
                           controller: _formCtrls['number'],
-                          validator: (v) => (v == null || v.trim().isEmpty)
-                              ? 'This field is required'
-                              : null,
+                          // ADDED VALIDATOR
+                          validator: (v) => Validators.validateID(v, type: _typeCtrl.text == 'dl' ? 'DL Number' : 'RC Number'),
                           decoration: InputDecoration(
                               labelText:
                               _typeCtrl.text == 'dl' ? 'DL Number' : 'RC Number',
@@ -1103,12 +1118,16 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                         const SizedBox(height: 16),
                         TextFormField(
                             controller: _formCtrls['crime'],
+                            // ADDED VALIDATOR
+                            validator: (v) => v != null && v.isNotEmpty ? Validators.validateReason(v, fieldName: 'Reason') : null,
                             decoration: const InputDecoration(
                                 labelText: 'Reason for Blacklisting (optional)',
                                 border: const OutlineInputBorder())),
                         const SizedBox(height: 16),
                         TextFormField(
                             controller: _formCtrls['name'],
+                            // ADDED VALIDATOR
+                            validator: (v) => v != null && v.isNotEmpty ? Validators.validateSafeText(v, fieldName: 'Name') : null,
                             decoration: InputDecoration(
                                 labelText: _typeCtrl.text == 'dl'
                                     ? 'Name (optional)'
@@ -1118,6 +1137,13 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                         if (_typeCtrl.text == 'dl') ...[
                           TextFormField(
                               controller: _formCtrls['phone'],
+                              // Basic validation
+                              validator: (v) {
+                                if (v != null && v.isNotEmpty && !RegExp(r'^[0-9+\-\s]+$').hasMatch(v)) {
+                                  return 'Invalid phone number';
+                                }
+                                return null;
+                              },
                               decoration: const InputDecoration(
                                   labelText: 'Phone Number (optional)',
                                   border: const OutlineInputBorder())),
@@ -1126,18 +1152,21 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                         if (_typeCtrl.text == 'rc') ...[
                           TextFormField(
                               controller: _formCtrls['maker'],
+                              validator: (v) => v != null && v.isNotEmpty ? Validators.validateSafeText(v, fieldName: 'Maker') : null,
                               decoration: const InputDecoration(
                                   labelText: 'Maker Class (optional)',
                                   border: const OutlineInputBorder())),
                           const SizedBox(height: 16),
                           TextFormField(
                               controller: _formCtrls['vehicle'],
+                              validator: (v) => v != null && v.isNotEmpty ? Validators.validateSafeText(v, fieldName: 'Vehicle Class') : null,
                               decoration: const InputDecoration(
                                   labelText: 'Vehicle Class (optional)',
                                   border: const OutlineInputBorder())),
                           const SizedBox(height: 16),
                           TextFormField(
                               controller: _formCtrls['wheel'],
+                              validator: (v) => v != null && v.isNotEmpty ? Validators.validateSafeText(v, fieldName: 'Wheel Type') : null,
                               decoration: const InputDecoration(
                                   labelText: 'Wheel Type (optional)',
                                   border: const OutlineInputBorder())),
