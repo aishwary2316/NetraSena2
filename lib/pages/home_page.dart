@@ -1,7 +1,7 @@
 // lib/pages/home_page.dart
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+//import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import '../services/api_service.dart';
 import 'auth.dart';
@@ -66,9 +66,10 @@ class _HomePageState extends State<HomePage> {
     await prefs.remove('isActive');
     await prefs.remove('loginTime');
 
-    const secureStorage = FlutterSecureStorage();
-    //await secureStorage.delete(key: 'auth_token');
-    await secureStorage.delete(key: 'jwt');
+    await _api.localLogout();
+
+    // const secureStorage = FlutterSecureStorage();
+    // await secureStorage.delete(key: 'jwt');
 
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(

@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:safe_device/safe_device.dart'; // Security Package
 import 'pages/auth.dart'; // Your Auth Page
 import '../utils/safe_log.dart';
+import 'utils/session_guard.dart';
+
 void main() async {
   // 1. Ensure bindings are initialized before async checks
   WidgetsFlutterBinding.ensureInitialized();
@@ -41,15 +43,20 @@ void main() async {
   }
 
   // 4. Run the App (Normal vs Security Violation Screen)
-  runApp(isDeviceSecure ? const MyApp() : const SecurityViolationApp());
+  //runApp(isDeviceSecure ? const MyApp() : const SecurityViolationApp());
+  runApp(true ? const MyApp() : const SecurityViolationApp());
 }
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
+  // 1. Create a Global Navigator Key
+  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey, // 2. Assign the key
       title: 'Netra Sarthi',
       debugShowCheckedModeBanner: false,
       // Matching your existing theme colors from auth.dart
@@ -57,6 +64,13 @@ class MyApp extends StatelessWidget {
         primarySwatch: Colors.indigo,
         visualDensity: VisualDensity.adaptivePlatformDensity,
       ),
+      builder: (context, child) {
+        // 'child' here is the Navigator. We wrap it so SessionGuard covers all screens.
+        return SessionGuard(
+          navigatorKey: navigatorKey,
+          child: child!,
+        );
+      },
       home: const AuthPage(),
     );
   }

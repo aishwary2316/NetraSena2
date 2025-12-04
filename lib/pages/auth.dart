@@ -3,45 +3,35 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:local_auth/local_auth.dart'; // Required for Biometrics
-import 'package:flutter/foundation.dart'; // For kDebugMode
+import 'package:local_auth/local_auth.dart';
 import '../utils/safe_log.dart';
 import '../services/api_service.dart';
-import '../utils/validators.dart'; // Required for Regex Validation
+import '../utils/validators.dart';
 import 'home_page.dart';
 
-void main() {
-  WidgetsFlutterBinding.ensureInitialized();
+class AuthPage extends StatefulWidget {
+  final String? sessionExpiredMessage;
 
-  // Make the native status bar transparent so our top container shows through.
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
-    statusBarBrightness: Brightness.light,
-  ));
-
-  runApp(const AuthPage());
-}
-
-class AuthPage extends StatelessWidget {
-  const AuthPage({super.key});
+  // This constructor allows main.dart to pass the expiry message
+  const AuthPage({super.key, this.sessionExpiredMessage});
 
   @override
+  State<AuthPage> createState() => _AuthPageState();
+}
+
+class _AuthPageState extends State<AuthPage> {
+  @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Netra Sarthi Login',
-      debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        primarySwatch: Colors.indigo,
-        visualDensity: VisualDensity.adaptivePlatformDensity,
-      ),
-      home: const LoginPage(),
-    );
+    // FIX: Removed nested MaterialApp.
+    // We return LoginPage directly so it stays within the root MaterialApp context.
+    return LoginPage(sessionExpiredMessage: widget.sessionExpiredMessage);
   }
 }
 
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
+  final String? sessionExpiredMessage;
+
+  const LoginPage({super.key, this.sessionExpiredMessage});
 
   @override
   _LoginPageState createState() => _LoginPageState();
@@ -49,11 +39,12 @@ class LoginPage extends StatefulWidget {
 
 class _LoginPageState extends State<LoginPage> {
   final ApiService api = ApiService();
-  final LocalAuthentication auth = LocalAuthentication(); // Biometric Auth
+  final LocalAuthentication auth = LocalAuthentication();
 
-  // Form key to trigger validation
+  // CONTROL FLAG: Change this to 'true' to re-enable Biometrics later
+  final bool _isBiometricEnabled = false;
+
   final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
-
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
 
@@ -61,9 +52,38 @@ class _LoginPageState extends State<LoginPage> {
   bool _loading = false;
   String? _error;
 
+  @override
+  void initState() {
+    super.initState();
+    // FIX: Show Session Expired Message if it exists
+    if (widget.sessionExpiredMessage != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                widget.sessionExpiredMessage!,
+                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+              backgroundColor: Colors.redAccent,
+              behavior: SnackBarBehavior.floating,
+              duration: const Duration(seconds: 5),
+              action: SnackBarAction(
+                label: 'DISMISS',
+                textColor: Colors.white,
+                onPressed: () {
+                  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                },
+              ),
+            ),
+          );
+        }
+      });
+    }
+  }
+
   Future<void> _signIn() async {
     // 1. INPUT VALIDATION
-    // This checks the Validators.validateEmail logic before doing anything else.
     if (!_formKey.currentState!.validate()) {
       return;
     }
@@ -75,34 +95,40 @@ class _LoginPageState extends State<LoginPage> {
 
     // 2. BIOMETRIC INTERLOCK
     bool isBiometricAuthenticated = false;
-    try {
-      final bool canCheckBiometrics = await auth.canCheckBiometrics;
 
-      if (canCheckBiometrics) {
-        isBiometricAuthenticated = await auth.authenticate(
-          localizedReason: 'Officer identity verification required',
-          options: const AuthenticationOptions(
-            biometricOnly: true, // Strict: Do not allow PIN fallback
-            stickyAuth: true,
-          ),
-        );
-      } else {
-        // Fallback for devices without hardware (e.g. older phones)
-        // In a strict environment, you might disable this 'true' fallback.
-        isBiometricAuthenticated = true;
+    if (_isBiometricEnabled) {
+      try {
+        final bool canCheckBiometrics = await auth.canCheckBiometrics;
+
+        if (canCheckBiometrics) {
+          isBiometricAuthenticated = await auth.authenticate(
+            localizedReason: 'Officer identity verification required',
+            options: const AuthenticationOptions(
+              biometricOnly: true,
+              stickyAuth: true,
+            ),
+          );
+        } else {
+          // Fallback if hardware not available
+          isBiometricAuthenticated = false;
+        }
+      } catch (e) {
+        devLog('Biometric Error: $e');
+        setState(() {
+          _error = 'Biometric verification error';
+          _loading = false;
+        });
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Biometric Error: $e')),
+          );
+        }
+        return;
       }
-    } catch (e) {
-      devLog('Biometric Error: $e');
-      setState(() {
-        _error = 'Biometric verification error';
-        _loading = false;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Biometric Error: $e')),
-        );
-      }
-      return;
+    } else {
+      // BYPASS MODE
+      devLog('Biometrics disabled in code. Bypassing...');
+      isBiometricAuthenticated = true;
     }
 
     if (!isBiometricAuthenticated) {
@@ -122,6 +148,7 @@ class _LoginPageState extends State<LoginPage> {
     final email = _emailController.text.trim();
     final password = _passwordController.text;
 
+    // Helper to safely parse booleans from JSON
     bool parseBool(dynamic v) {
       if (v == null) return false;
       if (v is bool) return v;
@@ -138,24 +165,26 @@ class _LoginPageState extends State<LoginPage> {
       if (result['ok'] == true) {
         final data = result['data'] ?? {};
         final prefs = await SharedPreferences.getInstance();
+
         final String name = data['name'] ?? data['username'] ?? '';
         final String userId = data['userId']?.toString() ?? data['id']?.toString() ?? '';
         final String userEmail = data['email'] ?? email;
         final String role = data['role'] ?? '';
+
         final dynamic rawActive = data['isActive'];
-        final bool isActive = rawActive == true ||
-            rawActive == 1 ||
-            rawActive?.toString().trim().toLowerCase() == 'true' ||
-            rawActive?.toString().trim() == '1';
+        final bool isActive = parseBool(rawActive);
 
         final String loginTimeIso = DateTime.now().toIso8601String();
 
+        // Persist User Info (Non-Sensitive)
         if (userId.isNotEmpty) await prefs.setString('user_id', userId);
         if (name.isNotEmpty) await prefs.setString('user_name', name);
         if (userEmail.isNotEmpty) await prefs.setString('user_email', userEmail);
         if (role.isNotEmpty) await prefs.setString('user_role', role);
         await prefs.setBool('user_is_active', isActive);
         await prefs.setString('user_login_time', loginTimeIso);
+
+        // NOTE: JWT Token is already handled inside api.login() -> saveToken()
 
         if (!mounted) return;
         Navigator.of(context).pushReplacement(
@@ -164,7 +193,7 @@ class _LoginPageState extends State<LoginPage> {
               userName: name.isNotEmpty ? name : 'Operator',
               userEmail: userEmail,
               role: role,
-              isActive: parseBool(data['isActive']),
+              isActive: isActive,
               loginTime: DateTime.parse(loginTimeIso),
             ),
           ),
@@ -215,7 +244,7 @@ class _LoginPageState extends State<LoginPage> {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: verticalPadding),
-            child: Form( // Wrapped in Form widget for validation
+            child: Form(
               key: _formKey,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -229,14 +258,15 @@ class _LoginPageState extends State<LoginPage> {
                       alignment: Alignment.centerLeft,
                       child: Text('Email', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
                   const SizedBox(height: 8),
-                  TextFormField( // Changed to TextFormField
+                  TextFormField(
                     controller: _emailController,
                     keyboardType: TextInputType.emailAddress,
-                    validator: Validators.validateEmail, // Applied strict email validator
+                    validator: Validators.validateEmail,
                     decoration: InputDecoration(
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                       hintText: 'someone@example.com',
                       contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 16),
+                      prefixIcon: const Icon(Icons.email_outlined),
                     ),
                   ),
                   const SizedBox(height: 18),
@@ -244,15 +274,15 @@ class _LoginPageState extends State<LoginPage> {
                       alignment: Alignment.centerLeft,
                       child: Text('Password', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold))),
                   const SizedBox(height: 8),
-                  TextFormField( // Changed to TextFormField
+                  TextFormField(
                     controller: _passwordController,
                     obscureText: !_showPassword,
-                    // Basic empty check (Injection blocked via Hashing in ApiService)
                     validator: (v) => (v == null || v.isEmpty) ? 'Password required' : null,
                     decoration: InputDecoration(
                       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                       hintText: 'Shhhh...',
                       contentPadding: const EdgeInsets.symmetric(horizontal: 15, vertical: 16),
+                      prefixIcon: const Icon(Icons.lock_outline),
                     ),
                   ),
                   const SizedBox(height: 12),
@@ -270,7 +300,8 @@ class _LoginPageState extends State<LoginPage> {
                     ],
                   ),
                   const SizedBox(height: 10),
-                  if (_error != null) Text(_error!, style: const TextStyle(color: Colors.red)),
+                  if (_error != null)
+                    Text(_error!, style: const TextStyle(color: Colors.red, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
@@ -283,9 +314,12 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       child: _loading
                           ? const SizedBox(
-                        height: 18,
-                        width: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2, valueColor: AlwaysStoppedAnimation(Colors.white)),
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation(Colors.white)
+                        ),
                       )
                           : const Text(
                         'Sign In',
@@ -304,8 +338,6 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    // NOTE: we set SafeArea(top: false) because we are explicitly drawing a
-    // top bar of exact status-bar height so we don't want SafeArea to add extra top padding.
     return Scaffold(
       backgroundColor: Colors.indigo[50],
       body: SafeArea(
@@ -314,48 +346,41 @@ class _LoginPageState extends State<LoginPage> {
           builder: (context, constraints) {
             final double height = constraints.maxHeight;
             final double width = constraints.maxWidth;
-            // height reserved for content spacing
-            final double topSpacing = (height * 0.14).clamp(24.0, 220.0);
-            final double bottomSpacing = (height * 0.08).clamp(20.0, 140.0);
-
-            // exact status bar height
+            // Adjusted spacing logic to prevent overflow on small screens
+            final double topSpacing = (height * 0.14).clamp(24.0, 150.0);
+            final double bottomSpacing = (height * 0.08).clamp(20.0, 100.0);
             final double statusBarHeight = MediaQuery.of(context).padding.top;
 
             return SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
-                  // This top bar has the same color as the scaffold background
-                  // and sits *under* the native status bar because we made it transparent.
-                  // This creates the illusion that the status bar is Colors.indigo[50].
                   Container(height: statusBarHeight, width: double.infinity, color: Colors.white),
-
-                  // HEADER: full width, NO outer margin
                   Container(
                     color: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
                     child: Row(
                       children: [
-                        Image.asset('assets/logo.png', height: 50, errorBuilder: (c, o, s) => const SizedBox()),
-                        const SizedBox(width: 10),
+                        // Safe image loading
+                        Image.asset('assets/logo.png', height: 40, errorBuilder: (c, o, s) => const Icon(Icons.security, size: 40, color: Colors.indigo)),
+                        const SizedBox(width: 12),
                         const Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              //Text('Government of India', style: TextStyle(fontSize: 12, color: Colors.black54)),
                               Text('Netra Sarthi',
-                                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.indigo)),
+                                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.indigo)),
+                              Text('Secure Surveillance Portal',
+                                  style: TextStyle(fontSize: 12, color: Colors.grey)),
                             ],
                           ),
                         ),
                       ],
                     ),
                   ),
-
-                  // Remaining content (keeps internal padding)
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                    padding: const EdgeInsets.symmetric(horizontal: 16.0),
                     child: Column(
                       children: [
                         SizedBox(height: topSpacing),

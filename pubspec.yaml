@@ -39,12 +39,12 @@ flutter_launcher_icons:
 dependencies:
   flutter:
     sdk: flutter
-  mongo_dart: ^0.9.3 # Add this dependency for MongoDB
-  http: ^0.13.6
-  animate_do: ^3.0.0
-  flutter_secure_storage: ^8.0.0
-  shared_preferences: ^2.0.15
-  image_picker: ^0.8.7+6
+  mongo_dart: ^0.10.5
+  http: ^1.6.0
+  animate_do: ^4.2.0
+  flutter_secure_storage: ^9.2.4
+  shared_preferences: ^2.5.3
+  image_picker: ^1.2.1
   flutter_html: ^3.0.0-beta.2
   flutter_launcher_icons: ^0.14.4
   safe_device: ^1.3.8

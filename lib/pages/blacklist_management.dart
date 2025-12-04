@@ -9,7 +9,6 @@ import 'package:image_picker/image_picker.dart';
 import '../utils/safe_log.dart';
 import '../services/api_service.dart';
 import '../utils/validators.dart'; // Added Validators
-import 'error.dart';
 
 /// Blacklist Management
 class BlacklistManagementPage extends StatefulWidget {
@@ -26,7 +25,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
   final ApiService _api = ApiService();
 
   // Explicitly define Base URL
-  static const String BASE_URL = 'https://ai-tollgate-surveillance-1.onrender.com';
+  //String BASE_URL = ${ApiService.backendBaseUrl};
 
   final int _limit = 20;
 
@@ -163,11 +162,11 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     }
 
     final uri = Uri.parse(
-        '$BASE_URL/api/blacklist/dl?page=$page&limit=$_limit${q.isNotEmpty ? '&search=${Uri.encodeQueryComponent(q)}' : ''}');
+        '${ApiService.backendBaseUrl}/api/blacklist/dl?page=$page&limit=$_limit${q.isNotEmpty ? '&search=${Uri.encodeQueryComponent(q)}' : ''}');
 
     try {
       final headers = await _getHeaders();
-      final res = await http.get(uri, headers: headers).timeout(const Duration(seconds: 12));
+      final res = await http.get(uri, headers: headers).timeout(const Duration(seconds: 30));
       final body = jsonDecode(res.body);
 
       if (res.statusCode == 200) {
@@ -223,11 +222,11 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
     final q = _rcSearchCtrl.text.trim();
     final uri = Uri.parse(
-        '$BASE_URL/api/blacklist/rc?page=$page&limit=$_limit${q.isNotEmpty ? '&search=${Uri.encodeQueryComponent(q)}' : ''}');
+        '${ApiService.backendBaseUrl}/api/blacklist/rc?page=$page&limit=$_limit${q.isNotEmpty ? '&search=${Uri.encodeQueryComponent(q)}' : ''}');
 
     try {
       final headers = await _getHeaders();
-      final res = await http.get(uri, headers: headers).timeout(const Duration(seconds: 12));
+      final res = await http.get(uri, headers: headers).timeout(const Duration(seconds: 30));
       final body = jsonDecode(res.body);
 
       if (res.statusCode == 200) {
@@ -402,7 +401,7 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     });
 
     try {
-      final uri = Uri.parse('$BASE_URL/api/blacklist');
+      final uri = Uri.parse('${ApiService.backendBaseUrl}/api/blacklist');
       final headers = await _getHeaders();
 
       final res = await http
@@ -593,8 +592,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       );
 
       try {
-        if (Navigator.of(context, rootNavigator: true).canPop())
+        if (Navigator.of(context, rootNavigator: true).canPop()) {
           Navigator.of(context, rootNavigator: true).pop();
+        }
       } catch (_) {}
 
       if (!mounted) return;
@@ -612,28 +612,31 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
       }
     } catch (e) {
       try {
-        if (Navigator.of(context, rootNavigator: true).canPop())
+        if (Navigator.of(context, rootNavigator: true).canPop()) {
           Navigator.of(context, rootNavigator: true).pop();
+        }
       } catch (_) {}
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Add failed: $e'), backgroundColor: Colors.red));
+      }
     }
   }
 
   Future<bool> _markValid(String type, String id) async {
     try {
-      final uri = Uri.parse('$BASE_URL/api/blacklist/$type/$id');
+      final uri = Uri.parse('${ApiService.backendBaseUrl}/api/blacklist/$type/$id');
       final headers = await _getHeaders();
 
-      final res = await http.put(uri, headers: headers).timeout(const Duration(seconds: 12));
+      final res = await http.put(uri, headers: headers).timeout(const Duration(seconds: 30));
       final resp = jsonDecode(res.body);
 
       if (res.statusCode == 200) {
-        if (mounted)
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
               content: Text('Entry marked valid (removed)'),
               backgroundColor: Colors.green));
+        }
         if (type == 'dl') {
           await _fetchDLs(page: 1);
         } else {
@@ -641,16 +644,18 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         }
         return true;
       } else {
-        if (mounted)
+        if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
               content: Text(resp['message'] ?? 'Failed to mark valid'),
               backgroundColor: Colors.red));
+        }
         return false;
       }
     } catch (e) {
-      if (mounted)
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
             content: Text('Remove failed: $e'), backgroundColor: Colors.red));
+      }
       return false;
     }
   }
@@ -743,8 +748,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                 ok = false;
               } finally {
                 try {
-                  if (Navigator.of(context, rootNavigator: true).canPop())
+                  if (Navigator.of(context, rootNavigator: true).canPop()) {
                     Navigator.of(context, rootNavigator: true).pop();
+                  }
                 } catch (_) {}
               }
 
@@ -877,25 +883,29 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                 success = await _deleteFaceSuspectApi(personName);
                 if (success) {
                   await _fetchFaces();
-                  if (mounted)
+                  if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                         content: Text('Suspect deleted successfully!'),
                         backgroundColor: Colors.green));
+                  }
                 } else {
-                  if (mounted)
+                  if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                         content: Text('Failed to delete suspect'),
                         backgroundColor: Colors.red));
+                  }
                 }
               } catch (e) {
-                if (mounted)
+                if (mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                       content: Text('Delete failed: $e'), backgroundColor: Colors.red));
+                }
                 success = false;
               } finally {
                 try {
-                  if (Navigator.of(context, rootNavigator: true).canPop())
+                  if (Navigator.of(context, rootNavigator: true).canPop()) {
                     Navigator.of(context, rootNavigator: true).pop();
+                  }
                 } catch (_) {}
               }
 
@@ -1001,9 +1011,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
     _faceAddName.clear();
     _faceAddImage = null;
 
-    if (_tabController.index == 0)
+    if (_tabController.index == 0) {
       _typeCtrl.text = 'dl';
-    else if (_tabController.index == 1)
+    } else if (_tabController.index == 1)
       _typeCtrl.text = 'rc';
     else
       _typeCtrl.text = 'face';
@@ -1366,8 +1376,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                     final ok = await _markValid(type, idVal);
 
                     try {
-                      if (Navigator.of(context, rootNavigator: true).canPop())
+                      if (Navigator.of(context, rootNavigator: true).canPop()) {
                         Navigator.of(context, rootNavigator: true).pop();
+                      }
                     } catch (_) {}
 
                     setState(() => _isRemoving = false);
@@ -1448,8 +1459,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                       success = await _deleteFaceSuspectApi(name);
 
                       try {
-                        if (Navigator.of(context, rootNavigator: true).canPop())
+                        if (Navigator.of(context, rootNavigator: true).canPop()) {
                           Navigator.of(context, rootNavigator: true).pop();
+                        }
                       } catch (_) {}
 
                       if (success && mounted) {
@@ -1464,19 +1476,22 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                         }
                         Navigator.of(ctx2).pop();
                       } else {
-                        if (mounted)
+                        if (mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                               content: Text('Failed to delete suspect'),
                               backgroundColor: Colors.red));
+                        }
                       }
                     } catch (e) {
                       try {
-                        if (Navigator.of(context, rootNavigator: true).canPop())
+                        if (Navigator.of(context, rootNavigator: true).canPop()) {
                           Navigator.of(context, rootNavigator: true).pop();
+                        }
                       } catch (_) {}
-                      if (mounted)
+                      if (mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                             content: Text('Delete failed: $e'), backgroundColor: Colors.red));
+                      }
                     }
                   },
                 ),
@@ -1548,9 +1563,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
                       const EdgeInsets.symmetric(vertical: 0.0, horizontal: 16.0),
                     ),
                     onSubmitted: (_) {
-                      if (_tabController.index == 0)
+                      if (_tabController.index == 0) {
                         _fetchDLs(page: 1);
-                      else if (_tabController.index == 1)
+                      } else if (_tabController.index == 1)
                         _fetchRCs(page: 1);
                       else
                         _fetchFaces();

@@ -3,10 +3,8 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_service.dart';
-import '../utils/safe_log.dart';
 import '../utils/safe_error.dart'; // Import SafeError
 import '../utils/validators.dart'; // Import Validators
-import 'error.dart';
 
 enum _Severity { red, orange, none }
 enum _ActiveFilter { all, suspicious, systemAlerts, multipleDL }

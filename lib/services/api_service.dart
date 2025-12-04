@@ -10,16 +10,72 @@ import '../utils/safe_error.dart';
 class ApiService {
   // === Set this correctly for your environment ===
   static const String backendBaseUrl = 'https://ai-tollgate-surveillance-1.onrender.com';
-  static const String faceApiUrl = 'https://face-surveillance-api-777302308889.asia-south1.run.app';
 
   final HashService _hasher = HashService();
 
-  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
+  // ---------------------------------------------------------
+  // SECURITY FIX: Vulnerability #2 (Insecure Encryption Mode)
+  // ---------------------------------------------------------
+  // This forces Android to use AES-GCM (EncryptedSharedPreferences).
+  // NOTE: This will effectively "logout" existing users once, as old keys become unreadable.
+  AndroidOptions _getAndroidOptions() => const AndroidOptions(
+    encryptedSharedPreferences: true,
+    resetOnError: true,
+  );
+
+  late final FlutterSecureStorage _secureStorage = FlutterSecureStorage(
+    aOptions: _getAndroidOptions(),
+  );
+
+  // New Keys for Session Management
+  static const String _kLoginTime = 'login_timestamp';
+  static const String _kLastActive = 'last_active_timestamp';
+
+
 
   // Token helpers (do NOT change these — other parts of app rely on them)
-  Future<void> saveToken(String token) => _secureStorage.write(key: 'jwt', value: token);
+  // Future<void> saveToken(String token) => _secureStorage.write(key: 'jwt', value: token);
   Future<String?> getToken() => _secureStorage.read(key: 'jwt');
-  Future<void> deleteToken() => _secureStorage.delete(key: 'jwt');
+  // Future<void> deleteToken() => _secureStorage.delete(key: 'jwt');
+  Future<void> localLogout() => deleteToken();
+
+  // ---------------------------------------------------------
+  // UPDATED TOKEN HELPERS
+  // ---------------------------------------------------------
+
+  // When saving token, also save the Login Time and reset Last Active Time
+  Future<void> saveToken(String token) async {
+    final now = DateTime.now().toIso8601String();
+    await _secureStorage.write(key: 'jwt', value: token);
+    await _secureStorage.write(key: _kLoginTime, value: now);
+    await _secureStorage.write(key: _kLastActive, value: now);
+  }
+
+
+  // When updating activity (e.g., on app pause/resume), save to storage
+  Future<void> updateLastActivity() async {
+    final now = DateTime.now().toIso8601String();
+    await _secureStorage.write(key: _kLastActive, value: now);
+  }
+
+  // Helper to retrieve timestamps
+  Future<DateTime?> getLoginTimestamp() async {
+    final str = await _secureStorage.read(key: _kLoginTime);
+    if (str == null) return null;
+    return DateTime.tryParse(str);
+  }
+
+  Future<DateTime?> getLastActiveTimestamp() async {
+    final str = await _secureStorage.read(key: _kLastActive);
+    if (str == null) return null;
+    return DateTime.tryParse(str);
+  }
+
+  Future<void> deleteToken() async {
+    await _secureStorage.delete(key: 'jwt');
+    await _secureStorage.delete(key: _kLoginTime);
+    await _secureStorage.delete(key: _kLastActive);
+  }
 
   Map<String, String> _jsonHeaders({String? token}) {
     final headers = {'Content-Type': 'application/json', 'accept': 'application/json'};
@@ -28,25 +84,18 @@ class ApiService {
   }
 
   // -----------------------------
-  // LOGIN (robust)
+  // LOGIN (Secure)
   // -----------------------------
   Future<Map<String, dynamic>> login(String email, String password) async {
     final uri = Uri.parse('$backendBaseUrl/login');
     // 1. HASH THE PASSWORD
-    // Input: "operator123"
-    // Output: "a591a6d40bf420404a011733cfb7b190d62c..."
     final String hashedPassword = _hasher.hashPassword(password);
     devLog ("hashedPassword = $hashedPassword");
 
-    // 2. Get Device ID (from previous steps)
-    //final String? deviceId = await _getDeviceId();
-
     try {
-
       final payload = {
         'email': email,
-        'password': hashedPassword, // <--- SECURE
-        //'deviceId': deviceId,
+        'password': hashedPassword,
       };
 
       devLog('ApiService.login -> POST $uri with email=$email');
@@ -77,7 +126,6 @@ class ApiService {
       }
     } catch (e) {
       devLog('ApiService.login -> exception: $e');
-      //return {'ok': false, 'message': 'Network error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
@@ -89,24 +137,8 @@ class ApiService {
   // Protected GET example
   // -----------------------------
   Future<Map<String, dynamic>> getLogs() async {
-    final token = await getToken();
     final uri = Uri.parse('$backendBaseUrl/api/logs');
-    try {
-      final resp = await http.get(uri, headers: _jsonHeaders(token: token)).timeout(const Duration(seconds: 12));
-      if (resp.statusCode == 200) {
-        return {'ok': true, 'data': _safeJson(resp.body)};
-      } else if (resp.statusCode == 401) {
-        return {'ok': false, 'message': 'Unauthorized', 'status': 401};
-      } else {
-        return {'ok': false, 'message': 'Failed to fetch logs (${resp.statusCode})', 'body': _safeJson(resp.body)};
-      }
-    } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
-      return {
-        'ok': false,
-        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
-      };
-    }
+    return _authenticatedGet(uri);
   }
 
   // Helper to parse JSON safely
@@ -151,14 +183,14 @@ class ApiService {
     }
 
     try {
-      final streamed = await request.send().timeout(const Duration(seconds: 40));
+      // Increased timeout for robust verification
+      final streamed = await request.send().timeout(const Duration(seconds: 60));
       final resp = await http.Response.fromStream(streamed);
       final body = _safeJson(resp.body);
 
       if (resp.statusCode == 200) return {'ok': true, 'data': body};
       return {'ok': false, 'message': body['message'] ?? 'Verify failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network/upload error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "Network/upload error: Please try again.")
@@ -169,62 +201,21 @@ class ApiService {
   // -----------------------------
   // OCR endpoints (multipart)
   // -----------------------------
-  // Future<Map<String, dynamic>> ocrDL(File dlImage) async {
-  //   final uri = Uri.parse('https://dl-extractor-web-980624091991.us-central1.run.app/extract');
-  //   //final uri = Uri.parse('$backendBaseUrl/api/ocr/dl');
-  //   final request = http.MultipartRequest('POST', uri);
-  //   final token = await getToken();
-  //   if (token != null && token.isNotEmpty) request.headers['Authorization'] = 'Bearer $token';
-  //   request.headers['accept'] = 'application/json';
-  //
-  //   request.files.add(await http.MultipartFile.fromPath('file', dlImage.path,
-  //       filename: dlImage.path.split(Platform.pathSeparator).last));
-  //
-  //   try {
-  //     final streamed = await request.send().timeout(const Duration(seconds: 30));
-  //     final resp = await http.Response.fromStream(streamed);
-  //     final body = _safeJson(resp.body);
-  //     if (resp.statusCode == 200) {
-  //       // The new API returns { "success": true, "dl_numbers": ["...", "..."] }
-  //       // We map this to 'extracted_text' so your UI doesn't break.
-  //       String extractedData = '';
-  //       if (body['dl_numbers'] is List) {
-  //         extractedData = (body['dl_numbers'] as List).join(', '); // Join multiple DLs if found
-  //       } else {
-  //         extractedData = body['dl_numbers']?.toString() ?? '';
-  //       }
-  //
-  //       return {'ok': true, 'extracted_text': extractedData, 'data': body};
-  //     }
-  //     return {'ok': false, 'message': body['message'] ?? 'OCR DL failed (${resp.statusCode})', 'body': body};
-  //   } catch (e) {
-  //     return {'ok': false, 'message': 'Network error: $e'};
-  //   }
-  // }
-
-  // -----------------------------
-// OCR endpoints (multipart)
-// -----------------------------
   Future<Map<String, dynamic>> ocrDL(File dlImage) async {
-    // Correct URL from docs
     final uri = Uri.parse('https://dl-extractor-web-980624091991.us-central1.run.app/extract');
-
     final request = http.MultipartRequest('POST', uri);
-
-    // REMOVED Authorization header (not needed for this specific external service based on docs)
     request.headers['accept'] = 'application/json';
 
-    // Correct field name 'file' from docs
     request.files.add(await http.MultipartFile.fromPath(
         'file',
         dlImage.path,
         filename: dlImage.path.split(Platform.pathSeparator).last
     ));
 
-    devLog("Api Service: Posting to $uri"); // Add debug print
+    devLog("Api Service: Posting to $uri");
 
     try {
-      final streamed = await request.send().timeout(const Duration(seconds: 30));
+      final streamed = await request.send().timeout(const Duration(seconds: 45));
       final resp = await http.Response.fromStream(streamed);
       final body = _safeJson(resp.body);
 
@@ -239,7 +230,6 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'OCR DL failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "OCR DL extraction failed due to a network issue.")
@@ -258,7 +248,7 @@ class ApiService {
         filename: rcImage.path.split(Platform.pathSeparator).last));
 
     try {
-      final streamed = await request.send().timeout(const Duration(seconds: 30));
+      final streamed = await request.send().timeout(const Duration(seconds: 45));
       final resp = await http.Response.fromStream(streamed);
       final body = _safeJson(resp.body);
       if (resp.statusCode == 200) {
@@ -266,7 +256,6 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'OCR RC failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "OCR RC extraction failed due to a network issue.")
@@ -275,7 +264,7 @@ class ApiService {
   }
 
   // -----------------------------
-  // Blacklist suspect upload (multipart: name + photo -> field 'photo')
+  // Blacklist suspect upload (For Manual Blacklist Entry)
   // -----------------------------
   Future<Map<String, dynamic>> addSuspect({required String name, required File photo}) async {
     final uri = Uri.parse('$backendBaseUrl/api/blacklist/suspect');
@@ -297,7 +286,6 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Add suspect failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network/upload error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "Network/upload error: Please try again")
@@ -321,7 +309,6 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
@@ -341,7 +328,6 @@ class ApiService {
       if (resp.statusCode == 200) return {'ok': true, 'message': body['message'] ?? 'Marked valid', 'data': body};
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
@@ -350,46 +336,18 @@ class ApiService {
   }
 
   // -----------------------------
-  // Get blacklisted DLs / RCs with pagination & optional search
+  // Get blacklisted DLs / RCs
   // -----------------------------
   Future<Map<String, dynamic>> getBlacklistedDLs({int page = 1, int limit = 50, String search = ''}) async {
     final uri = Uri.parse(
         '$backendBaseUrl/api/blacklist/dl?page=$page&limit=$limit${search.isNotEmpty ? '&search=${Uri.encodeQueryComponent(search)}' : ''}');
-    final token = await getToken();
-    try {
-      final resp = await http.get(uri, headers: _jsonHeaders(token: token)).timeout(const Duration(seconds: 12));
-      final body = _safeJson(resp.body);
-      if (resp.statusCode == 200) {
-        return {'ok': true, 'data': body};
-      }
-      return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
-    } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
-      return {
-        'ok': false,
-        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
-      };
-    }
+    return _authenticatedGet(uri);
   }
 
   Future<Map<String, dynamic>> getBlacklistedRCs({int page = 1, int limit = 50, String search = ''}) async {
     final uri = Uri.parse(
         '$backendBaseUrl/api/blacklist/rc?page=$page&limit=$limit${search.isNotEmpty ? '&search=${Uri.encodeQueryComponent(search)}' : ''}');
-    final token = await getToken();
-    try {
-      final resp = await http.get(uri, headers: _jsonHeaders(token: token)).timeout(const Duration(seconds: 12));
-      final body = _safeJson(resp.body);
-      if (resp.statusCode == 200) {
-        return {'ok': true, 'data': body};
-      }
-      return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
-    } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
-      return {
-        'ok': false,
-        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
-      };
-    }
+    return _authenticatedGet(uri);
   }
 
   // -----------------------------
@@ -397,21 +355,7 @@ class ApiService {
   // -----------------------------
   Future<Map<String, dynamic>> getUsers() async {
     final uri = Uri.parse('$backendBaseUrl/api/users');
-    final token = await getToken();
-    try {
-      final resp = await http.get(uri, headers: _jsonHeaders(token: token)).timeout(const Duration(seconds: 12));
-      final body = _safeJson(resp.body);
-      if (resp.statusCode == 200) {
-        return {'ok': true, 'data': body};
-      }
-      return {'ok': false, 'message': body['message'] ?? 'Failed to fetch users (${resp.statusCode})', 'body': body};
-    } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
-      return {
-        'ok': false,
-        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
-      };
-    }
+    return _authenticatedGet(uri);
   }
 
   Future<Map<String, dynamic>> addUser({required String name, required String email, required String password, required String role}) async {
@@ -425,7 +369,6 @@ class ApiService {
       if (resp.statusCode == 201) return {'ok': true, 'userId': body['userId'], 'message': body['message'], 'data': body};
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
@@ -437,12 +380,11 @@ class ApiService {
     final uri = Uri.parse('$backendBaseUrl/api/users/$userId');
     final token = await getToken();
     try {
-      final resp = await http.delete(uri, headers: _jsonHeaders(token: token)).timeout(const Duration(seconds: 12));
+      final resp = await http.delete(uri, headers: _jsonHeaders(token: token)).timeout(const Duration(seconds: 30));
       final body = _safeJson(resp.body);
       if (resp.statusCode == 200) return {'ok': true, 'message': body['message'] ?? 'Deleted', 'data': body};
       return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
@@ -451,7 +393,7 @@ class ApiService {
   }
 
   // -----------------------------
-  // Server logout (update isActive flag) -> POST /api/logout/:userId
+  // Server logout
   // -----------------------------
   Future<Map<String, dynamic>> logoutServer(String userId) async {
     final uri = Uri.parse('$backendBaseUrl/api/logout/$userId');
@@ -459,13 +401,14 @@ class ApiService {
     try {
       final resp = await http.post(uri, headers: _jsonHeaders(token: token)).timeout(const Duration(seconds: 12));
       final body = _safeJson(resp.body);
+      // Always delete token locally even if server fails
+      await deleteToken();
       if (resp.statusCode == 200) {
-        await deleteToken();
         return {'ok': true, 'message': body['message'] ?? 'Logged out', 'data': body};
       }
       return {'ok': false, 'message': body['message'] ?? 'Failed to logout (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
+      await deleteToken();
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
@@ -473,69 +416,49 @@ class ApiService {
     }
   }
 
-  Future<void> localLogout() => deleteToken();
-
   // -----------------------------
-  // DL usage -> GET /api/dl-usage/:dl_number
+  // DL usage
   // -----------------------------
   Future<Map<String, dynamic>> getDLUsage(String dlNumber) async {
     final encoded = Uri.encodeComponent(dlNumber);
     final uri = Uri.parse('$backendBaseUrl/api/dl-usage/$encoded');
-    final token = await getToken();
-    try {
-      final resp = await http.get(uri, headers: _jsonHeaders(token: token)).timeout(const Duration(seconds: 12));
-      final body = _safeJson(resp.body);
-      if (resp.statusCode == 200) {
-        return {'ok': true, 'data': body};
-      }
-      return {'ok': false, 'message': body['message'] ?? 'Failed (${resp.statusCode})', 'body': body};
-    } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
-      return {
-        'ok': false,
-        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
-      };
-    }
+    return _authenticatedGet(uri);
   }
 
   // -----------------------------
-  // NEW FACE SURVEILLANCE API FUNCTIONS
+  // NEW FACE SURVEILLANCE API FUNCTIONS (Secure Middleware)
   // -----------------------------
 
-  // Method to get a list of all suspects from the face API
+  // Method to get a list of all suspects
   Future<Map<String, dynamic>> listSuspects({Map<String, String>? faceAuthHeader}) async {
-    final uri = Uri.parse('$faceApiUrl/list_suspects');
-    try {
-      final headers = <String, String>{'accept': 'application/json'};
-      if (faceAuthHeader != null) headers.addAll(faceAuthHeader);
-      final resp = await http.get(uri, headers: headers).timeout(const Duration(seconds: 12));
-      final body = _safeJson(resp.body);
-      if (resp.statusCode == 200) {
-        return {'ok': true, 'data': body};
-      } else {
-        return {'ok': false, 'message': 'Failed to fetch suspect list (${resp.statusCode})', 'body': body};
-      }
-    } catch (e) {
-      //return {'ok': false, 'message': 'Network error: $e'};
-      return {
-        'ok': false,
-        'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
-      };
-    }
+    // New Endpoint: /api/suspects
+    final uri = Uri.parse('$backendBaseUrl/api/suspects');
+    return _authenticatedGet(uri);
   }
 
   // Method to verify a face against the suspect list
   Future<Map<String, dynamic>> recognizeFace(String imagePath, {Map<String, String>? faceAuthHeader}) async {
-    final uri = Uri.parse('$faceApiUrl/recognize');
+    // New Endpoint: /api/recognize
+    final uri = Uri.parse('$backendBaseUrl/api/recognize');
+    final token = await getToken();
+
     final request = http.MultipartRequest('POST', uri);
     request.headers['accept'] = 'application/json';
-    if (faceAuthHeader != null) request.headers.addAll(faceAuthHeader);
 
-    request.files.add(await http.MultipartFile.fromPath('file', imagePath,
-        filename: imagePath.split(Platform.pathSeparator).last));
+    // Attach JWT
+    if (token != null && token.isNotEmpty) {
+      request.headers['Authorization'] = 'Bearer $token';
+    }
+
+    // UPDATED FIELD NAME: 'image'
+    request.files.add(await http.MultipartFile.fromPath(
+        'image',
+        imagePath,
+        filename: imagePath.split(Platform.pathSeparator).last
+    ));
 
     try {
-      final streamed = await request.send().timeout(const Duration(seconds: 40));
+      final streamed = await request.send().timeout(const Duration(seconds: 60)); // Increased timeout
       final resp = await http.Response.fromStream(streamed);
       final body = _safeJson(resp.body);
 
@@ -544,7 +467,6 @@ class ApiService {
       }
       return {'ok': false, 'message': body['message'] ?? 'Recognition failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network/upload error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "Network/upload error: Something went wrong due to a network issue.")
@@ -554,10 +476,17 @@ class ApiService {
 
   // Method to add a new person to the suspect list
   Future<Map<String, dynamic>> addSuspectFromFace({required String personName, required String imagePath, Map<String, String>? faceAuthHeader}) async {
-    final uri = Uri.parse('$faceApiUrl/add_suspect');
+    // New Endpoint: /api/suspects/add
+    final uri = Uri.parse('$backendBaseUrl/api/suspects/add');
+    final token = await getToken();
+
     final request = http.MultipartRequest('POST', uri);
     request.headers['accept'] = 'application/json';
-    if (faceAuthHeader != null) request.headers.addAll(faceAuthHeader);
+
+    // Attach JWT
+    if (token != null && token.isNotEmpty) {
+      request.headers['Authorization'] = 'Bearer $token';
+    }
 
     request.fields['person_name'] = personName;
     request.files.add(await http.MultipartFile.fromPath('file', imagePath,
@@ -568,12 +497,11 @@ class ApiService {
       final resp = await http.Response.fromStream(streamed);
       final body = _safeJson(resp.body);
 
-      if (resp.statusCode == 200) {
+      if (resp.statusCode == 200 || resp.statusCode == 201) {
         return {'ok': true, 'data': body};
       }
       return {'ok': false, 'message': body['detail'] ?? body['message'] ?? 'Add suspect failed (${resp.statusCode})', 'body': body};
     } catch (e) {
-      //return {'ok': false, 'message': 'Network/upload error: $e'};
       return {
         'ok': false,
         'message': SafeError.format(e, fallback: "Network/upload error: Something went wrong due to a network issue.")
@@ -581,15 +509,19 @@ class ApiService {
     }
   }
 
-  // Method to delete a person from the suspect list (use form-urlencoded as docs show)
+  // Method to delete a person from the suspect list
   Future<Map<String, dynamic>> deleteSuspectFromFace(String personName, {Map<String, String>? faceAuthHeader}) async {
-    final uri = Uri.parse('$faceApiUrl/delete_suspect');
-    try {
-      final headers = <String, String>{'Content-Type': 'application/x-www-form-urlencoded', 'accept': 'application/json'};
-      if (faceAuthHeader != null) headers.addAll(faceAuthHeader);
+    // New Endpoint: /api/suspects/delete
+    final uri = Uri.parse('$backendBaseUrl/api/suspects/delete');
+    final token = await getToken();
 
+    try {
       devLog('ApiService.deleteSuspectFromFace -> POST $uri person_name=$personName');
-      final resp = await http.post(uri, headers: headers, body: {'person_name': personName}).timeout(const Duration(seconds: 20));
+      final resp = await http.post(
+          uri,
+          headers: _jsonHeaders(token: token),
+          body: jsonEncode({'person_name': personName})
+      ).timeout(const Duration(seconds: 40));
 
       // parse body safely
       final body = _safeJson(resp.body);
@@ -598,24 +530,19 @@ class ApiService {
       // determine "deleted" deterministically
       bool deleted = false;
       try {
-        if (body is Map) {
+        if (resp.statusCode == 200) {
+          deleted = true;
+        } else if (body is Map) {
           final statusStr = (body['status'] ?? body['detail'] ?? body['result'] ?? '').toString().toLowerCase();
           if (statusStr.contains('deleted')) deleted = true;
           final dc = body['deleted_count'] ?? body['deleted'];
           if (dc is num && dc.toInt() > 0) deleted = true;
-        } else if (body is String) {
-          if (body.toLowerCase().contains('deleted')) deleted = true;
-        } else if (body is Map && body.containsKey('raw')) {
-          final raw = body['raw'].toString().toLowerCase();
-          if (raw.contains('deleted')) deleted = true;
         }
       } catch (e) {
-        // ignore parsing exceptions, keep deleted=false
         devLog('ApiService.deleteSuspectFromFace -> parsing error: $e');
       }
 
-      if (resp.statusCode == 200) {
-        // Return ok:true and explicit deleted flag + useful debug info
+      if (deleted) {
         return {
           'ok': true,
           'deleted': deleted,
@@ -636,11 +563,34 @@ class ApiService {
       };
     } catch (e) {
       devLog('ApiService.deleteSuspectFromFace -> exception: $e');
-      //return {'ok': false, 'deleted': false, 'message': 'Network error: $e'};
       return {
         'ok': false,
         'deleted': false,
         'message': SafeError.format(e, fallback: "Something went wrong due to a network issue.")
+      };
+    }
+  }
+
+  // -----------------------------
+  // Internal Helper: Authenticated GET
+  // -----------------------------
+  Future<Map<String, dynamic>> _authenticatedGet(Uri uri) async {
+    final token = await getToken();
+    try {
+      final resp = await http.get(uri, headers: _jsonHeaders(token: token)).timeout(const Duration(seconds: 12));
+      final body = _safeJson(resp.body);
+
+      if (resp.statusCode == 200) {
+        return {'ok': true, 'data': body};
+      } else if (resp.statusCode == 401 || resp.statusCode == 403) {
+        return {'ok': false, 'message': 'Unauthorized (401/403). Please login again.', 'status': resp.statusCode};
+      } else {
+        return {'ok': false, 'message': body['message'] ?? 'Failed to fetch data (${resp.statusCode})', 'body': body};
+      }
+    } catch (e) {
+      return {
+        'ok': false,
+        'message': SafeError.format(e, fallback: "Network connection error.")
       };
     }
   }
