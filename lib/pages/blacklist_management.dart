@@ -8,7 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import '../utils/safe_log.dart';
 import '../services/api_service.dart';
-import '../utils/validators.dart'; // Added Validators
+import '../utils/validators.dart';
 
 /// Blacklist Management
 class BlacklistManagementPage extends StatefulWidget {
@@ -625,7 +625,15 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
 
   Future<bool> _markValid(String type, String id) async {
     try {
-      final uri = Uri.parse('${ApiService.backendBaseUrl}/api/blacklist/$type/$id');
+      // final uri = Uri.parse('${ApiService.backendBaseUrl}/api/blacklist/$type/$id');
+      // Encode the ID to ensure the URI is always valid format
+      final encodedId = Uri.encodeComponent(id);
+      final uri = Uri.parse('${ApiService.backendBaseUrl}/api/blacklist/$type/$encodedId');
+
+      // Optional: Add a log to verify the URL being called
+      devLog("Attempting to delete $type with URI: $uri");
+
+
       final headers = await _getHeaders();
 
       final res = await http.put(uri, headers: headers).timeout(const Duration(seconds: 30));
@@ -702,9 +710,34 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
           }
 
           final entry = list[i];
-          final id = (entry['_id'] is Map)
-              ? (entry['_id']['\$oid'] ?? entry['_id'].toString())
-              : entry['_id']?.toString() ?? '';
+          // final id = (entry['_id'] is Map)
+          //     ? (entry['_id']['\$oid'] ?? entry['_id'].toString())
+          //     : entry['_id']?.toString() ?? '';
+
+          // NEW / FIXED
+          dynamic rawId = entry['id'];
+          String id = '';
+
+          if (rawId != null) {
+            if (rawId is Map) {
+              // Handle MongoDB extended JSON format { "$oid": "..." }
+              id = rawId[r'$oid']?.toString() ?? rawId.toString();
+            } else {
+              // Handle standard SQL integers or strings
+              id = rawId.toString();
+            }
+          }
+
+          if (id.isEmpty) {
+            print("WARNING: Could not extract ID from entry: $entry");
+          }
+
+          // DEBUG LOG: helps verify exactly what we extracted
+          if (id.contains('{') || id.contains('}')) {
+            devLog('WARNING: ID extraction failed, got complex object: $id');
+
+          }
+
           final title = type == 'dl'
               ? (entry['dl_number'] ?? entry['dl'] ?? 'Unknown DL')
               : (entry['regn_number'] ??
@@ -760,9 +793,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
               if (mounted) {
                 setState(() {
                   list.removeWhere((e) {
-                    final eid = (e['_id'] is Map)
-                        ? (e['_id']['\$oid'] ?? e['_id'].toString())
-                        : e['_id']?.toString() ?? '';
+                    final eid = (e['id'] is Map)
+                        ? (e['id']['\$oid'] ?? e['id'].toString())
+                        : e['id']?.toString() ?? '';
                     return eid == id;
                   });
                   if (type == 'dl') {
@@ -1246,9 +1279,9 @@ class _BlacklistManagementPageState extends State<BlacklistManagementPage>
         bool _isRemoving = false;
         return StatefulBuilder(builder: (ctx2, setState2) {
           final List<Widget> content = [];
-          final idVal = (item['_id'] is Map)
-              ? (item['_id']['\$oid'] ?? item['_id'].toString())
-              : item['_id']?.toString() ?? '';
+          final idVal = (item['id'] is Map)
+              ? (item['id']['\$oid'] ?? item['id'].toString())
+              : item['id']?.toString() ?? '';
           if (idVal.isNotEmpty) content.add(row('ID', idVal));
 
           if (type == 'dl') {

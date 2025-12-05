@@ -101,7 +101,7 @@ class ApiService {
       devLog('ApiService.login -> POST $uri with email=$email');
       final resp = await http
           .post(uri, headers: {'Content-Type': 'application/json', 'accept': 'application/json'}, body: jsonEncode(payload))
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 30));
 
       devLog('ApiService.login -> statusCode: ${resp.statusCode}');
       devLog('ApiService.login -> raw body: ${resp.body}');
@@ -302,7 +302,7 @@ class ApiService {
     try {
       final resp = await http
           .post(uri, headers: _jsonHeaders(token: token), body: jsonEncode(payload))
-          .timeout(const Duration(seconds: 15));
+          .timeout(const Duration(seconds: 30));
       final body = _safeJson(resp.body);
       if (resp.statusCode == 200) {
         return {'ok': true, 'message': body['message'] ?? 'Added to blacklist', 'data': body};
@@ -320,7 +320,11 @@ class ApiService {
   // Mark blacklist entry as valid -> PUT /api/blacklist/:type/:id
   // -----------------------------
   Future<Map<String, dynamic>> markBlacklistValid({required String type, required String id}) async {
-    final uri = Uri.parse('$backendBaseUrl/api/blacklist/$type/$id');
+    // final uri = Uri.parse('$backendBaseUrl/api/blacklist/$type/$id');
+
+    final encodedId = Uri.encodeComponent(id);
+    final uri = Uri.parse('$backendBaseUrl/api/blacklist/$type/$encodedId');
+
     final token = await getToken();
     try {
       final resp = await http.put(uri, headers: _jsonHeaders(token: token)).timeout(const Duration(seconds: 12));
