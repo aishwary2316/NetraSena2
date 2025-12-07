@@ -1,6 +1,6 @@
-# ai_tollgate_survaillance_system
+# suspect_identification_system
 
-Artificial Intelligence based Survaillance system for Ministry of Road Transport and Highways
+Artificial Intelligence based Suspect Identification system for Manipur Police
 
 ## Getting Started
 
